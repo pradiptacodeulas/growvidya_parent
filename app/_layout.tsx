@@ -6,6 +6,7 @@ import { StyleSheet, View } from "react-native";
 import { MenuProvider } from "react-native-popup-menu";
 import { Provider, useDispatch, useSelector } from "react-redux";
 import { logout, setUser } from "@/redux/auth/authSlice";
+import { checkParentAuth } from "@/redux/auth/authThunk";
 import { clearDashboardData } from "@/redux/home/homeSlice";
 import { setTheme } from "@/redux/features/ui/slice";
 import store, { AppDispatch, RootState } from "@/redux/store";
@@ -35,49 +36,77 @@ const toastConfig: ToastConfig = {
   success: (props) => (
     <BaseToast
       {...props}
+      text1NumberOfLines={2}
+      text2NumberOfLines={4}
       style={{
         borderLeftColor: "#10B981",
         borderRadius: 14,
         height: "auto",
         minHeight: 56,
-        paddingVertical: 8,
+        width: "92%",
+        paddingVertical: 10,
         backgroundColor: "#FFFFFF",
       }}
-      contentContainerStyle={{ paddingHorizontal: 14 }}
+      contentContainerStyle={{ paddingHorizontal: 14, paddingVertical: 2 }}
       text1Style={{ fontSize: 14, fontWeight: "700", color: "#111827" }}
-      text2Style={{ fontSize: 12.5, color: "#4B5563" }}
+      text2Style={{ fontSize: 12.5, lineHeight: 18, color: "#4B5563", marginTop: 2 }}
     />
   ),
   error: (props) => (
     <BaseToast
       {...props}
+      text1NumberOfLines={2}
+      text2NumberOfLines={4}
       style={{
         borderLeftColor: "#EF4444",
         borderRadius: 14,
         height: "auto",
         minHeight: 56,
-        paddingVertical: 8,
+        width: "92%",
+        paddingVertical: 10,
         backgroundColor: "#FFFFFF",
       }}
-      contentContainerStyle={{ paddingHorizontal: 14 }}
+      contentContainerStyle={{ paddingHorizontal: 14, paddingVertical: 2 }}
       text1Style={{ fontSize: 14, fontWeight: "700", color: "#111827" }}
-      text2Style={{ fontSize: 12.5, color: "#4B5563" }}
+      text2Style={{ fontSize: 12.5, lineHeight: 18, color: "#4B5563", marginTop: 2 }}
+    />
+  ),
+  warning: (props) => (
+    <BaseToast
+      {...props}
+      text1NumberOfLines={2}
+      text2NumberOfLines={4}
+      style={{
+        borderLeftColor: "#F59E0B",
+        borderRadius: 14,
+        height: "auto",
+        minHeight: 56,
+        width: "92%",
+        paddingVertical: 10,
+        backgroundColor: "#FFFFFF",
+      }}
+      contentContainerStyle={{ paddingHorizontal: 14, paddingVertical: 2 }}
+      text1Style={{ fontSize: 14, fontWeight: "700", color: "#111827" }}
+      text2Style={{ fontSize: 12.5, lineHeight: 18, color: "#4B5563", marginTop: 2 }}
     />
   ),
   info: (props) => (
     <InfoToast
       {...props}
+      text1NumberOfLines={2}
+      text2NumberOfLines={4}
       style={{
         borderLeftColor: "#3B82F6",
         borderRadius: 14,
         height: "auto",
         minHeight: 56,
-        paddingVertical: 8,
+        width: "92%",
+        paddingVertical: 10,
         backgroundColor: "#FFFFFF",
       }}
-      contentContainerStyle={{ paddingHorizontal: 14 }}
+      contentContainerStyle={{ paddingHorizontal: 14, paddingVertical: 2 }}
       text1Style={{ fontSize: 14, fontWeight: "700", color: "#111827" }}
-      text2Style={{ fontSize: 12.5, color: "#4B5563" }}
+      text2Style={{ fontSize: 12.5, lineHeight: 18, color: "#4B5563", marginTop: 2 }}
     />
   ),
 };
@@ -112,22 +141,43 @@ function MainLayout() {
           await storeData("@app_theme_mode", "light");
         }
 
-        // Initialize Auth
+        // Initialize Auth & Verify Session Against Backend
         const authResponse = await getData("userData");
-        if (authResponse) {
-          const token = authResponse.token || authResponse.access_token || authResponse.data?.token;
-          if (token) {
-            setAuthToken(token);
-          }
-        }
+        const token =
+          authResponse?.token ||
+          authResponse?.access_token ||
+          authResponse?.data?.token ||
+          null;
 
-        dispatch(setUser(authResponse || null));
+        if (authResponse && token) {
+          setAuthToken(token);
+          const verifyAction = await dispatch(checkParentAuth(authResponse));
+          if (checkParentAuth.rejected.match(verifyAction)) {
+            const payload = verifyAction.payload as
+              | { forceLogout?: boolean; message?: string }
+              | undefined;
+            if (payload?.forceLogout) {
+              disconnectSocket();
+              dispatch(clearDashboardData());
+              if (payload.message && payload.message !== "No active parent session") {
+                Toast.show({
+                  type: "error",
+                  text1: "Session Expired",
+                  text2: payload.message,
+                });
+              }
+            }
+          }
+        } else {
+          setAuthToken(null);
+          dispatch(setUser(null));
+        }
       } catch (e) {
         dispatch(setUser(null));
       }
     };
     initializeApp();
-  }, []);
+  }, [dispatch]);
 
   useEffect(() => {
     // Redirect logic: Run whenever auth state or initialization changes
@@ -137,7 +187,8 @@ function MainLayout() {
     const inMainGroup =
       segments[0] === "(main)" ||
       segments[0] === "student" ||
-      segments[0] === "chat";
+      segments[0] === "chat" ||
+      segments[0] === "settings";
 
     if (isAuthenticated) {
       if (!inMainGroup) {
@@ -159,6 +210,7 @@ function MainLayout() {
       <Stack.Screen name="(main)" />
       <Stack.Screen name="student" />
       <Stack.Screen name="chat" />
+      <Stack.Screen name="settings" />
     </Stack>
   );
 }

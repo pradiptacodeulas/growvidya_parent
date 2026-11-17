@@ -10,7 +10,6 @@ import {
   Platform,
   ScrollView,
   Image,
-  Alert,
   Keyboard,
   TouchableWithoutFeedback,
 } from "react-native";
@@ -25,78 +24,60 @@ import { useAppTheme } from "@/theme";
 import { cleanErrorMessage } from "@/utils/api";
 import { apiFetch } from "@/services/apiClient";
 
-const SAVED_IDENTIFIER_KEY = "@parent_saved_identifier";
-const REMEMBER_ME_KEY = "@parent_remember_me";
+const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
 export default function SignInScreen() {
   const dispatch = useDispatch<AppDispatch>();
   const { colors, isDark } = useAppTheme();
   const { loading } = useSelector((state: RootState) => state.auth);
 
-  // Authentication Mode: 'passcode' (modern OTP) or 'password' (fallback)
+  // Authentication Mode: 'passcode' (Email OTP) or 'password'
   const [authMethod, setAuthMethod] = useState<"passcode" | "password">("passcode");
 
-  // Passcode flow step: 1 (Enter Identifier) or 2 (Enter 6-Digit Passcode)
+  // Passcode flow step: 1 (Enter Email) or 2 (Enter 6-Digit OTP)
   const [step, setStep] = useState<1 | 2>(1);
 
-  // Common identifier: Parent Email or Phone number
+  // Common identifier: Parent Registered Email Address
   const [identifier, setIdentifier] = useState("");
 
   // Password-based authentication states
   const [password, setPassword] = useState("");
   const [showPassword, setShowPassword] = useState(false);
-  const [rememberMe, setRememberMe] = useState(true);
 
   // Passcode-based authentication states
   const [passcode, setPasscode] = useState("");
-  const [testPasscode, setTestPasscode] = useState<string | null>(null);
   const [maskedIdentifier, setMaskedIdentifier] = useState("");
   const [requestingPasscode, setRequestingPasscode] = useState(false);
   const [resendCooldown, setResendCooldown] = useState(0);
 
+  // Forgot Password 3-step flow states
+  const [forgotMode, setForgotMode] = useState(false);
+  const [forgotStep, setForgotStep] = useState<1 | 2 | 3>(1);
+  const [forgotOtp, setForgotOtp] = useState("");
+  const [forgotMaskedEmail, setForgotMaskedEmail] = useState("");
+  const [forgotResetToken, setForgotResetToken] = useState("");
+  const [newPassword, setNewPassword] = useState("");
+  const [confirmNewPassword, setConfirmNewPassword] = useState("");
+  const [showNewPassword, setShowNewPassword] = useState(false);
+  const [showConfirmNewPassword, setShowConfirmNewPassword] = useState(false);
+  const [forgotLoading, setForgotLoading] = useState(false);
+  const [forgotCooldown, setForgotCooldown] = useState(0);
+
   const [errorMessage, setErrorMessage] = useState("");
 
   const passcodeInputRef = useRef<TextInput>(null);
+  const forgotOtpInputRef = useRef<TextInput>(null);
 
   const logoSource = isDark
     ? require("@/assets/images/logo_dark.png")
     : require("@/assets/images/logo.png");
 
-  // Load saved identifier and rememberMe preference on mount
+  // Clear any legacy saved identifier on mount so email is never left behind after logout
   useEffect(() => {
-    const loadSavedCredentials = async () => {
-      try {
-        const [savedId, savedRemember] = await Promise.all([
-          AsyncStorage.getItem(SAVED_IDENTIFIER_KEY),
-          AsyncStorage.getItem(REMEMBER_ME_KEY),
-        ]);
-        if (savedRemember !== null) {
-          setRememberMe(savedRemember === "true");
-        }
-        if (savedId && savedRemember !== "false") {
-          setIdentifier(savedId);
-        }
-      } catch (e) {
-        // Ignore storage read errors
-      }
-    };
-    loadSavedCredentials();
+    AsyncStorage.multiRemove(["@parent_saved_identifier", "@parent_remember_me"]).catch(() => {});
   }, []);
 
-  const persistIdentifierPreference = async (cleanId: string, shouldRemember: boolean) => {
-    try {
-      await AsyncStorage.setItem(REMEMBER_ME_KEY, String(shouldRemember));
-      if (shouldRemember && cleanId) {
-        await AsyncStorage.setItem(SAVED_IDENTIFIER_KEY, cleanId);
-      } else {
-        await AsyncStorage.removeItem(SAVED_IDENTIFIER_KEY);
-      }
-    } catch (e) {
-      // Ignore storage write errors
-    }
-  };
-
-  // Countdown timer for passcode resend cooldown
+  // Countdown timer for sign-in OTP resend cooldown
   useEffect(() => {
     let timer: any;
     if (resendCooldown > 0) {
@@ -105,12 +86,21 @@ export default function SignInScreen() {
     return () => clearTimeout(timer);
   }, [resendCooldown]);
 
-  // Request 6-digit passcode
+  // Countdown timer for forgot-password OTP resend cooldown
+  useEffect(() => {
+    let timer: any;
+    if (forgotCooldown > 0) {
+      timer = setTimeout(() => setForgotCooldown((prev) => prev - 1), 1000);
+    }
+    return () => clearTimeout(timer);
+  }, [forgotCooldown]);
+
+  // Request 6-digit Email OTP for Sign-In
   const handleRequestPasscode = async () => {
     setErrorMessage("");
-    const cleanId = identifier.trim();
-    if (!cleanId) {
-      const msg = "Please enter your registered email or phone number.";
+    const cleanEmail = identifier.trim();
+    if (!cleanEmail || !EMAIL_REGEX.test(cleanEmail)) {
+      const msg = "Please enter a valid registered email address.";
       setErrorMessage(msg);
       Toast.show({ type: "error", text1: "Validation Error", text2: msg });
       return;
@@ -120,28 +110,24 @@ export default function SignInScreen() {
     try {
       const response = await apiFetch("/parent/auth/request-passcode", {
         method: "POST",
-        body: JSON.stringify({ identifier: cleanId }),
+        body: JSON.stringify({ identifier: cleanEmail, email: cleanEmail }),
       });
 
       if (!response.success) {
-        throw new Error(response.message || "Failed to generate passcode.");
+        throw new Error(response.message || "Failed to send OTP.");
       }
 
       const resData = response.data || {};
-      setMaskedIdentifier(resData.maskedIdentifier || cleanId);
-      if (resData.testPasscode) {
-        setTestPasscode(String(resData.testPasscode));
-      } else {
-        setTestPasscode(null);
-      }
+      const masked = resData.maskedEmail || resData.maskedIdentifier || cleanEmail;
+      setMaskedIdentifier(masked);
       setPasscode("");
       setStep(2);
       setResendCooldown(30);
 
       Toast.show({
         type: "success",
-        text1: "Passcode Generated! 🔑",
-        text2: "A 6-digit passcode has been generated successfully.",
+        text1: "6-Digit OTP Sent! ✉️",
+        text2: response.message || `A 6-digit OTP has been sent to ${masked}.`,
       });
 
       setTimeout(() => {
@@ -150,7 +136,7 @@ export default function SignInScreen() {
     } catch (err: any) {
       const msg = cleanErrorMessage(
         err?.message,
-        "Failed to request passcode. Please check your details."
+        "Failed to send OTP. Please check your email address."
       );
       setErrorMessage(msg);
       Toast.show({ type: "error", text1: "Request Failed", text2: msg });
@@ -159,22 +145,22 @@ export default function SignInScreen() {
     }
   };
 
-  // Verify 6-digit passcode & sign in
+  // Verify 6-digit Email OTP & sign in
   const handleVerifyPasscode = async () => {
     setErrorMessage("");
     const cleanCode = passcode.trim();
     if (!cleanCode || cleanCode.length !== 6) {
-      const msg = "Please enter the full 6-digit passcode.";
+      const msg = "Please enter the full 6-digit OTP.";
       setErrorMessage(msg);
       Toast.show({ type: "error", text1: "Validation Error", text2: msg });
       return;
     }
 
-    const cleanId = identifier.trim();
+    const cleanEmail = identifier.trim();
     try {
       const resultAction = await dispatch(
         loginWithPasscode({
-          identifier: cleanId,
+          identifier: cleanEmail,
           passcode: cleanCode,
         })
       );
@@ -182,34 +168,37 @@ export default function SignInScreen() {
       if (loginWithPasscode.rejected.match(resultAction)) {
         const msg = cleanErrorMessage(
           resultAction.payload as string,
-          "Invalid or expired 6-digit passcode. Please try again."
+          "Invalid or expired 6-digit OTP. Please try again."
         );
         setErrorMessage(msg);
         Toast.show({ type: "error", text1: "Verification Failed", text2: msg });
       } else {
-        await persistIdentifierPreference(cleanId, rememberMe);
+        setIdentifier("");
+        setPasscode("");
+        setPassword("");
+        setStep(1);
         Toast.show({
           type: "success",
           text1: "Welcome Back! 👋",
-          text2: "Signed in successfully via passcode.",
+          text2: "Signed in successfully!",
         });
       }
     } catch (error: any) {
       const msg = cleanErrorMessage(
         error?.message,
-        "Unable to verify passcode. Please check connection."
+        "Unable to verify OTP. Please check connection."
       );
       setErrorMessage(msg);
       Toast.show({ type: "error", text1: "Verification Failed", text2: msg });
     }
   };
 
-  // Password-based login fallback
+  // Password-based login
   const handlePasswordLogin = async () => {
     setErrorMessage("");
-    const cleanId = identifier.trim();
-    if (!cleanId) {
-      const msg = "Please enter your registered email address.";
+    const cleanEmail = identifier.trim();
+    if (!cleanEmail || !EMAIL_REGEX.test(cleanEmail)) {
+      const msg = "Please enter a valid registered email address.";
       setErrorMessage(msg);
       Toast.show({ type: "error", text1: "Validation Error", text2: msg });
       return;
@@ -224,7 +213,8 @@ export default function SignInScreen() {
     try {
       const resultAction = await dispatch(
         login({
-          email: cleanId,
+          identifier: cleanEmail,
+          email: cleanEmail,
           password: password.trim(),
         })
       );
@@ -236,7 +226,9 @@ export default function SignInScreen() {
         setErrorMessage(msg);
         Toast.show({ type: "error", text1: "Login Failed", text2: msg });
       } else {
-        await persistIdentifierPreference(cleanId, rememberMe);
+        setIdentifier("");
+        setPassword("");
+        setPasscode("");
         Toast.show({
           type: "success",
           text1: "Welcome Back! 👋",
@@ -253,38 +245,181 @@ export default function SignInScreen() {
     }
   };
 
-  const handleForgotPassword = () => {
-    Alert.alert(
-      "Forgot Password",
-      "You can sign in directly using a 6-digit Passcode (OTP) or contact your school administration office to reset your password.",
-      [
-        { text: "Cancel", style: "cancel" },
-        {
-          text: "Use Passcode (OTP)",
-          onPress: () => {
-            setAuthMethod("passcode");
-            setStep(1);
-            setPasscode("");
-            setErrorMessage("");
-          },
-        },
-      ]
-    );
+  // ===================================================
+  // 3-STEP FORGOT PASSWORD HANDLERS
+  // ===================================================
+  const handleStartForgotPassword = () => {
+    setForgotMode(true);
+    setForgotStep(1);
+    setForgotOtp("");
+    setForgotResetToken("");
+    setNewPassword("");
+    setConfirmNewPassword("");
+    setErrorMessage("");
   };
 
-  // 6-digit interactive passcode boxes
-  const renderPasscodeBoxes = () => {
-    const digits = passcode.split("");
+  const handleRequestForgotOtp = async () => {
+    setErrorMessage("");
+    const cleanEmail = identifier.trim();
+    if (!cleanEmail || !EMAIL_REGEX.test(cleanEmail)) {
+      const msg = "Please enter your registered email address.";
+      setErrorMessage(msg);
+      Toast.show({ type: "error", text1: "Validation Error", text2: msg });
+      return;
+    }
+
+    setForgotLoading(true);
+    try {
+      const response = await apiFetch("/parent/auth/forgot-password/request-otp", {
+        method: "POST",
+        body: JSON.stringify({ email: cleanEmail, identifier: cleanEmail }),
+      });
+
+      if (!response.success) {
+        throw new Error(response.message || "Failed to send password reset OTP.");
+      }
+
+      const resData = response.data || {};
+      const masked = resData.maskedEmail || resData.maskedIdentifier || cleanEmail;
+      setForgotMaskedEmail(masked);
+      setForgotOtp("");
+      setForgotStep(2);
+      setForgotCooldown(30);
+
+      Toast.show({
+        type: "success",
+        text1: "Reset OTP Sent! ✉️",
+        text2: response.message || `A 6-digit OTP has been sent to ${masked}.`,
+      });
+
+      setTimeout(() => {
+        forgotOtpInputRef.current?.focus();
+      }, 300);
+    } catch (err: any) {
+      const msg = cleanErrorMessage(
+        err?.message,
+        "Failed to send password reset OTP."
+      );
+      setErrorMessage(msg);
+      Toast.show({ type: "error", text1: "Request Failed", text2: msg });
+    } finally {
+      setForgotLoading(false);
+    }
+  };
+
+  const handleVerifyForgotOtp = async () => {
+    setErrorMessage("");
+    const cleanCode = forgotOtp.trim();
+    if (!cleanCode || cleanCode.length !== 6) {
+      const msg = "Please enter the complete 6-digit OTP.";
+      setErrorMessage(msg);
+      Toast.show({ type: "error", text1: "Validation Error", text2: msg });
+      return;
+    }
+
+    const cleanEmail = identifier.trim();
+    setForgotLoading(true);
+    try {
+      const response = await apiFetch("/parent/auth/forgot-password/verify-otp", {
+        method: "POST",
+        body: JSON.stringify({
+          email: cleanEmail,
+          identifier: cleanEmail,
+          otp: cleanCode,
+        }),
+      });
+
+      if (!response.success || !response.data?.resetToken) {
+        throw new Error(response.message || "Invalid or expired OTP.");
+      }
+
+      setForgotResetToken(response.data.resetToken);
+      setForgotStep(3);
+      Toast.show({
+        type: "success",
+        text1: "OTP Verified",
+        text2: "Please enter your new password.",
+      });
+    } catch (err: any) {
+      const msg = cleanErrorMessage(err?.message, "Invalid or expired OTP.");
+      setErrorMessage(msg);
+      Toast.show({ type: "error", text1: "Verification Failed", text2: msg });
+    } finally {
+      setForgotLoading(false);
+    }
+  };
+
+  const handleResetPasswordSubmit = async () => {
+    setErrorMessage("");
+    if (!newPassword || newPassword.length < 6) {
+      const msg = "New password must be at least 6 characters long.";
+      setErrorMessage(msg);
+      Toast.show({ type: "error", text1: "Validation Error", text2: msg });
+      return;
+    }
+    if (newPassword !== confirmNewPassword) {
+      const msg = "New password and confirm password do not match.";
+      setErrorMessage(msg);
+      Toast.show({ type: "error", text1: "Validation Error", text2: msg });
+      return;
+    }
+
+    setForgotLoading(true);
+    try {
+      const response = await apiFetch("/parent/auth/forgot-password/reset", {
+        method: "POST",
+        body: JSON.stringify({
+          resetToken: forgotResetToken,
+          newPassword,
+          confirmPassword: confirmNewPassword,
+        }),
+      });
+
+      if (!response.success) {
+        throw new Error(response.message || "Failed to reset password.");
+      }
+
+      Toast.show({
+        type: "success",
+        text1: "Password Reset Successful",
+        text2: response.message || "You can now sign in with your new password.",
+      });
+
+      setForgotMode(false);
+      setForgotStep(1);
+      setForgotOtp("");
+      setForgotResetToken("");
+      setNewPassword("");
+      setConfirmNewPassword("");
+      setPassword("");
+      setAuthMethod("password");
+    } catch (err: any) {
+      const msg = cleanErrorMessage(err?.message, "Failed to reset password.");
+      setErrorMessage(msg);
+      Toast.show({ type: "error", text1: "Reset Failed", text2: msg });
+    } finally {
+      setForgotLoading(false);
+    }
+  };
+
+  // 6-digit interactive OTP boxes
+  const renderOtpBoxes = (
+    value: string,
+    onChange: (val: string) => void,
+    inputRef: React.RefObject<TextInput | null>,
+    autoFocusNow: boolean
+  ) => {
+    const digits = value.split("");
     return (
       <TouchableOpacity
         style={styles.passcodeContainer}
         activeOpacity={1}
-        onPress={() => passcodeInputRef.current?.focus()}
+        onPress={() => inputRef.current?.focus()}
       >
         {[0, 1, 2, 3, 4, 5].map((index) => {
           const digit = digits[index] || "";
           const isCurrent =
-            passcode.length === index || (passcode.length === 6 && index === 5);
+            value.length === index || (value.length === 6 && index === 5);
           return (
             <View
               key={index}
@@ -313,19 +448,23 @@ export default function SignInScreen() {
         })}
 
         <TextInput
-          ref={passcodeInputRef}
+          ref={inputRef}
           style={styles.hiddenPasscodeInput}
-          value={passcode}
+          value={value}
           onChangeText={(text) =>
-            setPasscode(text.replace(/[^0-9]/g, "").slice(0, 6))
+            onChange(text.replace(/[^0-9]/g, "").slice(0, 6))
           }
           keyboardType="number-pad"
           maxLength={6}
-          autoFocus={step === 2}
+          autoFocus={autoFocusNow}
         />
       </TouchableOpacity>
     );
   };
+
+  const isOtpInputView =
+    (!forgotMode && authMethod === "passcode" && step === 2) ||
+    (forgotMode && forgotStep === 2);
 
   return (
     <SafeAreaView style={[styles.container, { backgroundColor: colors.background }]}>
@@ -343,428 +482,614 @@ export default function SignInScreen() {
             bounces={false}
             overScrollMode="never"
           >
-          <View style={styles.mainContent}>
-            {/* Logo Section */}
-            <View style={styles.logoContainer}>
-              <Image source={logoSource} style={styles.logoImage} resizeMode="contain" />
-            </View>
+            <View style={styles.mainContent}>
+              {/* Logo Section (Hidden on OTP input screen) */}
+              {!isOtpInputView && (
+                <View style={styles.logoContainer}>
+                  <Image source={logoSource} style={styles.logoImage} resizeMode="contain" />
+                </View>
+              )}
 
-            {/* Header Text Section */}
-            <View style={styles.headerTextSection}>
-              <View style={[styles.portalBadge, { backgroundColor: colors.primaryLight }]}>
-                <Ionicons name="people" size={14} color={colors.primary} />
-                <Text style={[styles.portalBadgeText, { color: colors.primary }]}>
-                  PARENT PORTAL
-                </Text>
-              </View>
-              <Text style={[styles.titleText, { color: colors.text }]}>
-                {authMethod === "passcode" && step === 2
-                  ? "Enter Passcode"
-                  : "Parent Sign In"}
-              </Text>
-              <Text style={[styles.subtitleText, { color: colors.textSecondary }]}>
-                {authMethod === "passcode"
-                  ? step === 1
-                    ? "Sign in securely with a 6-digit passcode (OTP)"
-                    : `Enter the 6-digit passcode sent to ${maskedIdentifier || identifier}`
-                  : "Enter your registered credentials to sign in"}
-              </Text>
-            </View>
-
-            {/* Authentication Method Segmented Tabs */}
-            <View
-              style={[
-                styles.authMethodTabs,
-                { backgroundColor: colors.surfaceSubtle, borderColor: colors.border },
-              ]}
-            >
-              <TouchableOpacity
-                style={[
-                  styles.authMethodTab,
-                  authMethod === "passcode" && { backgroundColor: colors.primary },
-                ]}
-                onPress={() => {
-                  setAuthMethod("passcode");
-                  setStep(1);
-                  setPasscode("");
-                  setErrorMessage("");
-                }}
-                activeOpacity={0.8}
-              >
-                <Ionicons
-                  name="key-outline"
-                  size={16}
-                  color={authMethod === "passcode" ? "#FFFFFF" : colors.textMuted}
-                />
-                <Text
-                  style={[
-                    styles.authMethodTabText,
-                    { color: authMethod === "passcode" ? "#FFFFFF" : colors.textMuted },
-                  ]}
-                >
-                  Passcode (OTP)
-                </Text>
-              </TouchableOpacity>
-
-              <TouchableOpacity
-                style={[
-                  styles.authMethodTab,
-                  authMethod === "password" && { backgroundColor: colors.primary },
-                ]}
-                onPress={() => {
-                  setAuthMethod("password");
-                  setStep(1);
-                  setErrorMessage("");
-                }}
-                activeOpacity={0.8}
-              >
-                <Ionicons
-                  name="lock-closed-outline"
-                  size={16}
-                  color={authMethod === "password" ? "#FFFFFF" : colors.textMuted}
-                />
-                <Text
-                  style={[
-                    styles.authMethodTabText,
-                    { color: authMethod === "password" ? "#FFFFFF" : colors.textMuted },
-                  ]}
-                >
-                  Password
-                </Text>
-              </TouchableOpacity>
-            </View>
-
-            {/* Error Banner */}
-            {!!errorMessage && (
-              <View style={[styles.errorBox, { backgroundColor: isDark ? "#7F1D1D" : "#FEE2E2" }]}>
-                <Ionicons name="alert-circle-outline" size={20} color="#EF4444" />
-                <Text style={[styles.errorText, { color: isDark ? "#FCA5A5" : "#991B1B" }]}>
-                  {errorMessage}
-                </Text>
-              </View>
-            )}
-
-            {/* =================================================== */}
-            {/* PASSCODE FLOW                                      */}
-            {/* =================================================== */}
-            {authMethod === "passcode" && (
-              <>
-                {step === 1 ? (
-                  /* Step 1: Identifier Input */
-                  <View style={styles.formGroup}>
-                    <Text style={[styles.formLabel, { color: colors.text }]}>
-                      Registered Email or Phone Number
+              {/* Header Text Section */}
+              <View style={styles.headerTextSection}>
+                {!isOtpInputView && (
+                  <View style={[styles.portalBadge, { backgroundColor: colors.primaryLight }]}>
+                    <Ionicons name="people" size={14} color={colors.primary} />
+                    <Text style={[styles.portalBadgeText, { color: colors.primary }]}>
+                      PARENT PORTAL
                     </Text>
-                    <View
-                      style={[
-                        styles.inputIconWrapper,
-                        {
-                          backgroundColor: colors.inputBg,
-                          borderColor: colors.border,
-                        },
-                      ]}
-                    >
-                      <Ionicons
-                        name="person-outline"
-                        size={20}
-                        color={colors.textMuted}
-                        style={styles.inputAddonIcon}
-                      />
-                      <TextInput
-                        style={[styles.textInput, { color: colors.text }]}
-                        placeholder="Enter email or phone number"
-                        placeholderTextColor={colors.textMuted}
-                        value={identifier}
-                        onChangeText={setIdentifier}
-                        autoCapitalize="none"
-                        autoCorrect={false}
-                        returnKeyType="done"
-                        onSubmitEditing={handleRequestPasscode}
-                      />
-                    </View>
-
-                    <TouchableOpacity
-                      style={[
-                        styles.loginButton,
-                        { backgroundColor: colors.primary },
-                        requestingPasscode && styles.disabledBtn,
-                      ]}
-                      onPress={handleRequestPasscode}
-                      disabled={requestingPasscode}
-                      activeOpacity={0.8}
-                    >
-                      {requestingPasscode ? (
-                        <ActivityIndicator color="#ffffff" size="small" />
-                      ) : (
-                        <View style={styles.btnRow}>
-                          <Ionicons name="key" size={18} color="#FFFFFF" style={{ marginRight: 6 }} />
-                          <Text style={styles.loginButtonText}>Get 6-Digit Passcode</Text>
-                        </View>
-                      )}
-                    </TouchableOpacity>
                   </View>
-                ) : (
-                  /* Step 2: 6-Digit Passcode Input */
-                  <View style={styles.formGroup}>
-                    {/* Test Mode Autofill Banner */}
-                    {testPasscode && (
+                )}
+                <Text style={[styles.titleText, { color: colors.text }]}>
+                  {forgotMode
+                    ? forgotStep === 1
+                      ? "Forgot Password"
+                      : forgotStep === 2
+                      ? "Enter 6-Digit OTP"
+                      : "Set New Password"
+                    : authMethod === "passcode" && step === 2
+                    ? "Enter 6-Digit OTP"
+                    : "Parent Sign In"}
+                </Text>
+                <Text style={[styles.subtitleText, { color: colors.textSecondary }]}>
+                  {forgotMode
+                    ? forgotStep === 1
+                      ? "Enter your registered email address to receive a 6-digit password reset OTP"
+                      : forgotStep === 2
+                      ? `We sent a 6-digit verification code to ${forgotMaskedEmail || identifier}`
+                      : "Create a strong new password for your parent account"
+                    : authMethod === "passcode"
+                    ? step === 1
+                      ? "Enter your registered email address to receive a 6-digit OTP"
+                      : `We sent a 6-digit verification code to ${maskedIdentifier || identifier}`
+                    : "Sign in with your registered email address and password"}
+                </Text>
+              </View>
+
+              {/* Authentication Method Segmented Tabs (Only on main Step 1 / Password view) */}
+              {!forgotMode && !isOtpInputView && (
+                <View
+                  style={[
+                    styles.authMethodTabs,
+                    { backgroundColor: colors.surfaceSubtle, borderColor: colors.border },
+                  ]}
+                >
+                  <TouchableOpacity
+                    style={[
+                      styles.authMethodTab,
+                      authMethod === "passcode" && { backgroundColor: colors.primary },
+                    ]}
+                    onPress={() => {
+                      setAuthMethod("passcode");
+                      setStep(1);
+                      setPasscode("");
+                      setErrorMessage("");
+                    }}
+                    activeOpacity={0.8}
+                  >
+                    <Ionicons
+                      name="key-outline"
+                      size={16}
+                      color={authMethod === "passcode" ? "#FFFFFF" : colors.textMuted}
+                    />
+                    <Text
+                      style={[
+                        styles.authMethodTabText,
+                        { color: authMethod === "passcode" ? "#FFFFFF" : colors.textMuted },
+                      ]}
+                    >
+                      6-Digit OTP
+                    </Text>
+                  </TouchableOpacity>
+
+                  <TouchableOpacity
+                    style={[
+                      styles.authMethodTab,
+                      authMethod === "password" && { backgroundColor: colors.primary },
+                    ]}
+                    onPress={() => {
+                      setAuthMethod("password");
+                      setStep(1);
+                      setErrorMessage("");
+                    }}
+                    activeOpacity={0.8}
+                  >
+                    <Ionicons
+                      name="lock-closed-outline"
+                      size={16}
+                      color={authMethod === "password" ? "#FFFFFF" : colors.textMuted}
+                    />
+                    <Text
+                      style={[
+                        styles.authMethodTabText,
+                        { color: authMethod === "password" ? "#FFFFFF" : colors.textMuted },
+                      ]}
+                    >
+                      Password
+                    </Text>
+                  </TouchableOpacity>
+                </View>
+              )}
+
+              {/* Error Banner */}
+              {!!errorMessage && (
+                <View style={[styles.errorBox, { backgroundColor: isDark ? "#7F1D1D" : "#FEE2E2" }]}>
+                  <Ionicons name="alert-circle-outline" size={20} color="#EF4444" />
+                  <Text style={[styles.errorText, { color: isDark ? "#FCA5A5" : "#991B1B" }]}>
+                    {errorMessage}
+                  </Text>
+                </View>
+              )}
+
+              {/* =================================================== */}
+              {/* FORGOT PASSWORD 3-STEP FLOW                         */}
+              {/* =================================================== */}
+              {forgotMode ? (
+                <View style={styles.formGroup}>
+                  {forgotStep === 1 && (
+                    <>
+                      <Text style={[styles.formLabel, { color: colors.text }]}>
+                        Registered Email Address
+                      </Text>
                       <View
                         style={[
-                          styles.testBanner,
+                          styles.inputIconWrapper,
                           {
-                            backgroundColor: isDark ? "#451A03" : "#FEF3C7",
-                            borderColor: isDark ? "#78350F" : "#FDE68A",
+                            backgroundColor: colors.inputBg,
+                            borderColor: colors.border,
                           },
                         ]}
                       >
-                        <View style={styles.testBannerHeader}>
-                          <View style={styles.testBadge}>
-                            <Ionicons name="flask-outline" size={12} color="#D97706" />
-                            <Text style={styles.testBadgeText}>Test Mode Active</Text>
-                          </View>
-                          <Text
-                            style={[
-                              styles.testExpireText,
-                              { color: isDark ? "#FCD34D" : "#92400E" },
-                            ]}
-                          >
-                            Valid for 10 mins
-                          </Text>
-                        </View>
+                        <Ionicons
+                          name="mail-outline"
+                          size={20}
+                          color={colors.textMuted}
+                          style={styles.inputAddonIcon}
+                        />
+                        <TextInput
+                          style={[styles.textInput, { color: colors.text }]}
+                          placeholder="Enter your registered email address"
+                          placeholderTextColor={colors.textMuted}
+                          value={identifier}
+                          onChangeText={setIdentifier}
+                          keyboardType="email-address"
+                          autoCapitalize="none"
+                          autoCorrect={false}
+                          returnKeyType="done"
+                          onSubmitEditing={handleRequestForgotOtp}
+                        />
+                      </View>
 
-                        <View style={styles.testCodeRow}>
-                          <Text
-                            style={[
-                              styles.testCodeLabel,
-                              { color: isDark ? "#FEF3C7" : "#78350F" },
-                            ]}
-                          >
-                            Your Passcode:
-                          </Text>
-                          <View style={styles.testCodePill}>
-                            <Text style={styles.testCodeText}>{testPasscode}</Text>
+                      <TouchableOpacity
+                        style={[
+                          styles.loginButton,
+                          { backgroundColor: colors.primary },
+                          forgotLoading && styles.disabledBtn,
+                        ]}
+                        onPress={handleRequestForgotOtp}
+                        disabled={forgotLoading}
+                        activeOpacity={0.8}
+                      >
+                        {forgotLoading ? (
+                          <ActivityIndicator color="#ffffff" size="small" />
+                        ) : (
+                          <View style={styles.btnRow}>
+                            <Ionicons name="mail" size={18} color="#FFFFFF" style={{ marginRight: 6 }} />
+                            <Text style={styles.loginButtonText}>Send Reset OTP</Text>
                           </View>
-                        </View>
+                        )}
+                      </TouchableOpacity>
+                    </>
+                  )}
+
+                  {forgotStep === 2 && (
+                    <>
+                      {renderOtpBoxes(forgotOtp, setForgotOtp, forgotOtpInputRef, true)}
+
+                      <View style={styles.passcodeActionsRow}>
+                        <TouchableOpacity
+                          onPress={() => {
+                            setForgotStep(1);
+                            setForgotOtp("");
+                            setErrorMessage("");
+                          }}
+                          activeOpacity={0.7}
+                          style={styles.actionLinkBtn}
+                        >
+                          <Ionicons
+                            name="pencil-outline"
+                            size={14}
+                            color={colors.textMuted}
+                            style={{ marginRight: 4 }}
+                          />
+                          <Text style={[styles.actionLinkText, { color: colors.textMuted }]}>
+                            Change Email
+                          </Text>
+                        </TouchableOpacity>
 
                         <TouchableOpacity
-                          style={[styles.autofillBtn, { backgroundColor: colors.primary }]}
-                          onPress={() => setPasscode(testPasscode)}
-                          activeOpacity={0.8}
+                          disabled={forgotCooldown > 0 || forgotLoading}
+                          onPress={handleRequestForgotOtp}
+                          activeOpacity={0.7}
+                          style={styles.actionLinkBtn}
                         >
-                          <Ionicons name="copy-outline" size={14} color="#FFFFFF" style={{ marginRight: 6 }} />
-                          <Text style={styles.autofillBtnText}>Click to Autofill Passcode</Text>
+                          <Ionicons
+                            name="refresh-outline"
+                            size={14}
+                            color={forgotCooldown > 0 ? colors.textMuted : colors.primary}
+                            style={{ marginRight: 4 }}
+                          />
+                          <Text
+                            style={[
+                              styles.actionLinkText,
+                              {
+                                color: forgotCooldown > 0 ? colors.textMuted : colors.primary,
+                                fontWeight: "700",
+                              },
+                            ]}
+                          >
+                            {forgotCooldown > 0 ? `Resend in ${forgotCooldown}s` : "Resend OTP"}
+                          </Text>
                         </TouchableOpacity>
                       </View>
-                    )}
 
-                    <Text style={[styles.formLabel, { color: colors.text, textAlign: "center" }]}>
-                      Enter 6-Digit Passcode
-                    </Text>
-
-                    {renderPasscodeBoxes()}
-
-                    <View style={styles.passcodeActionsRow}>
                       <TouchableOpacity
-                        onPress={() => {
-                          setStep(1);
-                          setPasscode("");
-                          setErrorMessage("");
-                        }}
-                        activeOpacity={0.7}
-                        style={styles.actionLinkBtn}
+                        style={[
+                          styles.loginButton,
+                          { backgroundColor: colors.primary },
+                          (forgotLoading || forgotOtp.length !== 6) && styles.disabledBtn,
+                        ]}
+                        onPress={handleVerifyForgotOtp}
+                        disabled={forgotLoading || forgotOtp.length !== 6}
+                        activeOpacity={0.8}
                       >
-                        <Ionicons
-                          name="pencil-outline"
-                          size={14}
-                          color={colors.textMuted}
-                          style={{ marginRight: 4 }}
-                        />
-                        <Text style={[styles.actionLinkText, { color: colors.textMuted }]}>
-                          Change ID / Phone
-                        </Text>
+                        {forgotLoading ? (
+                          <ActivityIndicator color="#ffffff" size="small" />
+                        ) : (
+                          <View style={styles.btnRow}>
+                            <Ionicons name="checkmark-circle" size={18} color="#FFFFFF" style={{ marginRight: 6 }} />
+                            <Text style={styles.loginButtonText}>Verify OTP</Text>
+                          </View>
+                        )}
                       </TouchableOpacity>
+                    </>
+                  )}
 
-                      <TouchableOpacity
-                        disabled={resendCooldown > 0 || requestingPasscode}
-                        onPress={handleRequestPasscode}
-                        activeOpacity={0.7}
-                        style={styles.actionLinkBtn}
+                  {forgotStep === 3 && (
+                    <>
+                      <Text style={[styles.formLabel, { color: colors.text }]}>
+                        New Password
+                      </Text>
+                      <View
+                        style={[
+                          styles.passGroup,
+                          { backgroundColor: colors.inputBg, borderColor: colors.border },
+                        ]}
                       >
-                        <Ionicons
-                          name="refresh-outline"
-                          size={14}
-                          color={resendCooldown > 0 ? colors.textMuted : colors.primary}
-                          style={{ marginRight: 4 }}
+                        <Ionicons name="lock-closed-outline" size={20} color={colors.textMuted} style={styles.inputAddonIcon} />
+                        <TextInput
+                          style={[styles.textInput, { color: colors.text }]}
+                          placeholder="Min. 6 characters"
+                          placeholderTextColor={colors.textMuted}
+                          value={newPassword}
+                          onChangeText={setNewPassword}
+                          secureTextEntry={!showNewPassword}
+                          autoCapitalize="none"
+                          autoCorrect={false}
                         />
-                        <Text
-                          style={[
-                            styles.actionLinkText,
-                            {
-                              color: resendCooldown > 0 ? colors.textMuted : colors.primary,
-                              fontWeight: "700",
-                            },
-                          ]}
+                        <TouchableOpacity
+                          style={styles.eyeIconContainer}
+                          onPress={() => setShowNewPassword(!showNewPassword)}
+                          hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
                         >
-                          {resendCooldown > 0 ? `Resend in ${resendCooldown}s` : "Resend Passcode"}
-                        </Text>
-                      </TouchableOpacity>
-                    </View>
+                          <Ionicons
+                            name={showNewPassword ? "eye-off-outline" : "eye-outline"}
+                            size={20}
+                            color={colors.textMuted}
+                          />
+                        </TouchableOpacity>
+                      </View>
 
+                      <Text style={[styles.formLabel, { color: colors.text, marginTop: 16 }]}>
+                        Confirm New Password
+                      </Text>
+                      <View
+                        style={[
+                          styles.passGroup,
+                          { backgroundColor: colors.inputBg, borderColor: colors.border },
+                        ]}
+                      >
+                        <Ionicons name="lock-closed-outline" size={20} color={colors.textMuted} style={styles.inputAddonIcon} />
+                        <TextInput
+                          style={[styles.textInput, { color: colors.text }]}
+                          placeholder="Re-enter new password"
+                          placeholderTextColor={colors.textMuted}
+                          value={confirmNewPassword}
+                          onChangeText={setConfirmNewPassword}
+                          secureTextEntry={!showConfirmNewPassword}
+                          autoCapitalize="none"
+                          autoCorrect={false}
+                          onSubmitEditing={handleResetPasswordSubmit}
+                        />
+                        <TouchableOpacity
+                          style={styles.eyeIconContainer}
+                          onPress={() => setShowConfirmNewPassword(!showConfirmNewPassword)}
+                          hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+                        >
+                          <Ionicons
+                            name={showConfirmNewPassword ? "eye-off-outline" : "eye-outline"}
+                            size={20}
+                            color={colors.textMuted}
+                          />
+                        </TouchableOpacity>
+                      </View>
+
+                      <TouchableOpacity
+                        style={[
+                          styles.loginButton,
+                          { backgroundColor: colors.primary },
+                          forgotLoading && styles.disabledBtn,
+                        ]}
+                        onPress={handleResetPasswordSubmit}
+                        disabled={forgotLoading}
+                        activeOpacity={0.8}
+                      >
+                        {forgotLoading ? (
+                          <ActivityIndicator color="#ffffff" size="small" />
+                        ) : (
+                          <View style={styles.btnRow}>
+                            <Ionicons name="key-outline" size={18} color="#FFFFFF" style={{ marginRight: 6 }} />
+                            <Text style={styles.loginButtonText}>Reset Password</Text>
+                          </View>
+                        )}
+                      </TouchableOpacity>
+                    </>
+                  )}
+
+                  {!isOtpInputView && (
                     <TouchableOpacity
-                      style={[
-                        styles.loginButton,
-                        { backgroundColor: colors.primary },
-                        (loading || passcode.length !== 6) && styles.disabledBtn,
-                      ]}
-                      onPress={handleVerifyPasscode}
-                      disabled={loading || passcode.length !== 6}
-                      activeOpacity={0.8}
+                      onPress={() => {
+                        setForgotMode(false);
+                        setForgotStep(1);
+                        setForgotOtp("");
+                        setErrorMessage("");
+                      }}
+                      activeOpacity={0.7}
+                      style={[styles.actionLinkBtn, { alignSelf: "center", marginTop: 18 }]}
                     >
-                      {loading ? (
-                        <ActivityIndicator color="#ffffff" size="small" />
+                      <Ionicons
+                        name="arrow-back-outline"
+                        size={16}
+                        color={colors.primary}
+                        style={{ marginRight: 6 }}
+                      />
+                      <Text style={[styles.actionLinkText, { color: colors.primary, fontSize: 13 }]}>
+                        Back to Sign In
+                      </Text>
+                    </TouchableOpacity>
+                  )}
+                </View>
+              ) : (
+                <>
+                  {/* =================================================== */}
+                  {/* PASSCODE (EMAIL OTP) FLOW                           */}
+                  {/* =================================================== */}
+                  {authMethod === "passcode" && (
+                    <>
+                      {step === 1 ? (
+                        <View style={styles.formGroup}>
+                          <Text style={[styles.formLabel, { color: colors.text }]}>
+                            Registered Email Address
+                          </Text>
+                          <View
+                            style={[
+                              styles.inputIconWrapper,
+                              {
+                                backgroundColor: colors.inputBg,
+                                borderColor: colors.border,
+                              },
+                            ]}
+                          >
+                            <Ionicons
+                              name="mail-outline"
+                              size={20}
+                              color={colors.textMuted}
+                              style={styles.inputAddonIcon}
+                            />
+                            <TextInput
+                              style={[styles.textInput, { color: colors.text }]}
+                              placeholder="Enter registered email address"
+                              placeholderTextColor={colors.textMuted}
+                              value={identifier}
+                              onChangeText={setIdentifier}
+                              keyboardType="email-address"
+                              autoCapitalize="none"
+                              autoCorrect={false}
+                              returnKeyType="done"
+                              onSubmitEditing={handleRequestPasscode}
+                            />
+                          </View>
+
+                          <TouchableOpacity
+                            style={[
+                              styles.loginButton,
+                              { backgroundColor: colors.primary },
+                              requestingPasscode && styles.disabledBtn,
+                            ]}
+                            onPress={handleRequestPasscode}
+                            disabled={requestingPasscode}
+                            activeOpacity={0.8}
+                          >
+                            {requestingPasscode ? (
+                              <ActivityIndicator color="#ffffff" size="small" />
+                            ) : (
+                              <View style={styles.btnRow}>
+                                <Ionicons name="key" size={18} color="#FFFFFF" style={{ marginRight: 6 }} />
+                                <Text style={styles.loginButtonText}>Send 6-Digit OTP</Text>
+                              </View>
+                            )}
+                          </TouchableOpacity>
+                        </View>
                       ) : (
-                        <View style={styles.btnRow}>
-                          <Ionicons name="checkmark-circle" size={18} color="#FFFFFF" style={{ marginRight: 6 }} />
-                          <Text style={styles.loginButtonText}>Verify & Sign In</Text>
+                        <View style={styles.formGroup}>
+                          {renderOtpBoxes(passcode, setPasscode, passcodeInputRef, step === 2)}
+
+                          <View style={styles.passcodeActionsRow}>
+                            <TouchableOpacity
+                              onPress={() => {
+                                setStep(1);
+                                setPasscode("");
+                                setErrorMessage("");
+                              }}
+                              activeOpacity={0.7}
+                              style={styles.actionLinkBtn}
+                            >
+                              <Ionicons
+                                name="pencil-outline"
+                                size={14}
+                                color={colors.textMuted}
+                                style={{ marginRight: 4 }}
+                              />
+                              <Text style={[styles.actionLinkText, { color: colors.textMuted }]}>
+                                Change Email
+                              </Text>
+                            </TouchableOpacity>
+
+                            <TouchableOpacity
+                              disabled={resendCooldown > 0 || requestingPasscode}
+                              onPress={handleRequestPasscode}
+                              activeOpacity={0.7}
+                              style={styles.actionLinkBtn}
+                            >
+                              <Ionicons
+                                name="refresh-outline"
+                                size={14}
+                                color={resendCooldown > 0 ? colors.textMuted : colors.primary}
+                                style={{ marginRight: 4 }}
+                              />
+                              <Text
+                                style={[
+                                  styles.actionLinkText,
+                                  {
+                                    color: resendCooldown > 0 ? colors.textMuted : colors.primary,
+                                    fontWeight: "700",
+                                  },
+                                ]}
+                              >
+                                {resendCooldown > 0 ? `Resend in ${resendCooldown}s` : "Resend OTP"}
+                              </Text>
+                            </TouchableOpacity>
+                          </View>
+
+                          <TouchableOpacity
+                            style={[
+                              styles.loginButton,
+                              { backgroundColor: colors.primary },
+                              (loading || passcode.length !== 6) && styles.disabledBtn,
+                            ]}
+                            onPress={handleVerifyPasscode}
+                            disabled={loading || passcode.length !== 6}
+                            activeOpacity={0.8}
+                          >
+                            {loading ? (
+                              <ActivityIndicator color="#ffffff" size="small" />
+                            ) : (
+                              <View style={styles.btnRow}>
+                                <Ionicons name="checkmark-circle" size={18} color="#FFFFFF" style={{ marginRight: 6 }} />
+                                <Text style={styles.loginButtonText}>Verify & Sign In</Text>
+                              </View>
+                            )}
+                          </TouchableOpacity>
                         </View>
                       )}
-                    </TouchableOpacity>
-                  </View>
-                )}
-              </>
-            )}
-
-            {/* =================================================== */}
-            {/* PASSWORD FLOW (FALLBACK)                            */}
-            {/* =================================================== */}
-            {authMethod === "password" && (
-              <View style={styles.formGroup}>
-                {/* Email Address */}
-                <Text style={[styles.formLabel, { color: colors.text }]}>
-                  Registered Email Address
-                </Text>
-                <View
-                  style={[
-                    styles.inputIconWrapper,
-                    {
-                      backgroundColor: colors.inputBg,
-                      borderColor: colors.border,
-                    },
-                  ]}
-                >
-                  <Ionicons name="mail-outline" size={20} color={colors.textMuted} style={styles.inputAddonIcon} />
-                  <TextInput
-                    style={[styles.textInput, { color: colors.text }]}
-                    placeholder="Enter your registered email"
-                    placeholderTextColor={colors.textMuted}
-                    value={identifier}
-                    onChangeText={setIdentifier}
-                    keyboardType="email-address"
-                    autoCapitalize="none"
-                    autoCorrect={false}
-                  />
-                </View>
-
-                {/* Password */}
-                <Text style={[styles.formLabel, { color: colors.text, marginTop: 20 }]}>
-                  Password
-                </Text>
-                <View
-                  style={[
-                    styles.passGroup,
-                    {
-                      backgroundColor: colors.inputBg,
-                      borderColor: colors.border,
-                    },
-                  ]}
-                >
-                  <Ionicons name="lock-closed-outline" size={20} color={colors.textMuted} style={styles.inputAddonIcon} />
-                  <TextInput
-                    style={[styles.textInput, { color: colors.text }]}
-                    placeholder="Enter your password"
-                    placeholderTextColor={colors.textMuted}
-                    value={password}
-                    onChangeText={setPassword}
-                    secureTextEntry={!showPassword}
-                    autoCapitalize="none"
-                    autoCorrect={false}
-                    onSubmitEditing={handlePasswordLogin}
-                  />
-                  <TouchableOpacity
-                    style={styles.eyeIconContainer}
-                    onPress={() => setShowPassword(!showPassword)}
-                    hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
-                  >
-                    <Ionicons
-                      name={showPassword ? "eye-off-outline" : "eye-outline"}
-                      size={20}
-                      color={colors.textMuted}
-                    />
-                  </TouchableOpacity>
-                </View>
-
-                {/* Remember Me & Forgot Password */}
-                <View style={styles.optionsRow}>
-                  <TouchableOpacity
-                    style={styles.rememberMeGroup}
-                    onPress={() => {
-                      const nextVal = !rememberMe;
-                      setRememberMe(nextVal);
-                      persistIdentifierPreference(identifier.trim(), nextVal);
-                    }}
-                    activeOpacity={0.7}
-                  >
-                    <View
-                      style={[
-                        styles.checkbox,
-                        {
-                          borderColor: rememberMe ? colors.primary : colors.border,
-                          backgroundColor: rememberMe ? colors.primary : "transparent",
-                        },
-                      ]}
-                    >
-                      {rememberMe && <Ionicons name="checkmark" size={14} color="#FFFFFF" />}
-                    </View>
-                    <Text style={[styles.rememberMeText, { color: colors.textSecondary }]}>
-                      Remember me
-                    </Text>
-                  </TouchableOpacity>
-
-                  <TouchableOpacity onPress={handleForgotPassword} activeOpacity={0.7}>
-                    <Text style={[styles.forgotPassText, { color: colors.primary }]}>
-                      Forgot Password?
-                    </Text>
-                  </TouchableOpacity>
-                </View>
-
-                {/* Sign In Button */}
-                <TouchableOpacity
-                  style={[
-                    styles.loginButton,
-                    { backgroundColor: colors.primary, marginTop: 4 },
-                    loading && styles.disabledBtn,
-                  ]}
-                  onPress={handlePasswordLogin}
-                  disabled={loading}
-                  activeOpacity={0.8}
-                >
-                  {loading ? (
-                    <ActivityIndicator color="#FFFFFF" size="small" />
-                  ) : (
-                    <Text style={styles.loginButtonText}>Sign In with Password</Text>
+                    </>
                   )}
-                </TouchableOpacity>
-              </View>
-            )}
 
-            {/* Help / Footer */}
-            <View style={styles.footerSection}>
-              <Text style={[styles.footerText, { color: colors.textMuted }]}>
-                Need help accessing your parent portal? Contact your school administration office.
-              </Text>
+                  {/* =================================================== */}
+                  {/* PASSWORD FLOW                                       */}
+                  {/* =================================================== */}
+                  {authMethod === "password" && (
+                    <View style={styles.formGroup}>
+                      <Text style={[styles.formLabel, { color: colors.text }]}>
+                        Email Address
+                      </Text>
+                      <View
+                        style={[
+                          styles.inputIconWrapper,
+                          {
+                            backgroundColor: colors.inputBg,
+                            borderColor: colors.border,
+                          },
+                        ]}
+                      >
+                        <Ionicons name="mail-outline" size={20} color={colors.textMuted} style={styles.inputAddonIcon} />
+                        <TextInput
+                          style={[styles.textInput, { color: colors.text }]}
+                          placeholder="Enter registered email address"
+                          placeholderTextColor={colors.textMuted}
+                          value={identifier}
+                          onChangeText={setIdentifier}
+                          keyboardType="email-address"
+                          autoCapitalize="none"
+                          autoCorrect={false}
+                        />
+                      </View>
+
+                      <View style={styles.passwordLabelRow}>
+                        <Text style={[styles.formLabel, { color: colors.text, marginBottom: 0 }]}>
+                          Password
+                        </Text>
+                        <TouchableOpacity onPress={handleStartForgotPassword} activeOpacity={0.7}>
+                          <Text style={[styles.forgotPassText, { color: colors.primary }]}>
+                            Forgot Password?
+                          </Text>
+                        </TouchableOpacity>
+                      </View>
+
+                      <View
+                        style={[
+                          styles.passGroup,
+                          {
+                            backgroundColor: colors.inputBg,
+                            borderColor: colors.border,
+                          },
+                        ]}
+                      >
+                        <Ionicons name="lock-closed-outline" size={20} color={colors.textMuted} style={styles.inputAddonIcon} />
+                        <TextInput
+                          style={[styles.textInput, { color: colors.text }]}
+                          placeholder="Enter your password"
+                          placeholderTextColor={colors.textMuted}
+                          value={password}
+                          onChangeText={setPassword}
+                          secureTextEntry={!showPassword}
+                          autoCapitalize="none"
+                          autoCorrect={false}
+                          onSubmitEditing={handlePasswordLogin}
+                        />
+                        <TouchableOpacity
+                          style={styles.eyeIconContainer}
+                          onPress={() => setShowPassword(!showPassword)}
+                          hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+                        >
+                          <Ionicons
+                            name={showPassword ? "eye-off-outline" : "eye-outline"}
+                            size={20}
+                            color={colors.textMuted}
+                          />
+                        </TouchableOpacity>
+                      </View>
+
+                      {/* Sign In Button */}
+                      <TouchableOpacity
+                        style={[
+                          styles.loginButton,
+                          { backgroundColor: colors.primary, marginTop: 22 },
+                          loading && styles.disabledBtn,
+                        ]}
+                        onPress={handlePasswordLogin}
+                        disabled={loading}
+                        activeOpacity={0.8}
+                      >
+                        {loading ? (
+                          <ActivityIndicator color="#FFFFFF" size="small" />
+                        ) : (
+                          <Text style={styles.loginButtonText}>Sign In with Password</Text>
+                        )}
+                      </TouchableOpacity>
+                    </View>
+                  )}
+                </>
+              )}
+
+              {/* Help / Footer */}
+              <View style={styles.footerSection}>
+                <Text style={[styles.footerText, { color: colors.textMuted }]}>
+                  Need help accessing your parent portal? Contact your school administration office.
+                </Text>
+              </View>
             </View>
-          </View>
-        </ScrollView>
+          </ScrollView>
         </TouchableWithoutFeedback>
       </KeyboardAvoidingView>
     </SafeAreaView>
@@ -797,7 +1122,7 @@ const styles = StyleSheet.create({
   },
   headerTextSection: {
     alignItems: "center",
-    marginBottom: 28,
+    marginBottom: 24,
   },
   portalBadge: {
     flexDirection: "row",
@@ -864,6 +1189,13 @@ const styles = StyleSheet.create({
     fontWeight: "600",
     marginBottom: 10,
   },
+  passwordLabelRow: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+    marginTop: 20,
+    marginBottom: 10,
+  },
   inputIconWrapper: {
     flexDirection: "row",
     alignItems: "center",
@@ -890,29 +1222,6 @@ const styles = StyleSheet.create({
   },
   eyeIconContainer: {
     padding: 4,
-  },
-  optionsRow: {
-    flexDirection: "row",
-    justifyContent: "space-between",
-    alignItems: "center",
-    marginTop: 16,
-    marginBottom: 24,
-  },
-  rememberMeGroup: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 8,
-  },
-  checkbox: {
-    width: 18,
-    height: 18,
-    borderRadius: 4,
-    borderWidth: 1.5,
-    justifyContent: "center",
-    alignItems: "center",
-  },
-  rememberMeText: {
-    fontSize: 13,
   },
   forgotPassText: {
     fontSize: 13,
@@ -945,7 +1254,7 @@ const styles = StyleSheet.create({
   passcodeContainer: {
     flexDirection: "row",
     justifyContent: "space-between",
-    marginVertical: 18,
+    marginVertical: 14,
     position: "relative",
   },
   digitBox: {
@@ -971,7 +1280,7 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     justifyContent: "space-between",
     alignItems: "center",
-    marginTop: 12,
+    marginTop: 10,
     marginBottom: 6,
     paddingHorizontal: 2,
   },
@@ -984,71 +1293,9 @@ const styles = StyleSheet.create({
     fontSize: 12,
     fontWeight: "600",
   },
-  testBanner: {
-    borderRadius: 14,
-    padding: 14,
-    marginBottom: 20,
-    borderWidth: 1,
-  },
-  testBannerHeader: {
-    flexDirection: "row",
-    justifyContent: "space-between",
-    alignItems: "center",
-    marginBottom: 6,
-  },
-  testBadge: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 4,
-  },
-  testBadgeText: {
-    fontSize: 11,
-    fontWeight: "700",
-    color: "#D97706",
-    textTransform: "uppercase",
-  },
-  testExpireText: {
-    fontSize: 11,
-    fontWeight: "500",
-  },
-  testCodeRow: {
-    flexDirection: "row",
-    alignItems: "center",
-    marginBottom: 8,
-    gap: 8,
-  },
-  testCodeLabel: {
-    fontSize: 13,
-    fontWeight: "600",
-  },
-  testCodePill: {
-    backgroundColor: "#F59E0B",
-    paddingHorizontal: 10,
-    paddingVertical: 2,
-    borderRadius: 6,
-  },
-  testCodeText: {
-    color: "#FFFFFF",
-    fontSize: 15,
-    fontWeight: "700",
-    letterSpacing: 2,
-  },
-  autofillBtn: {
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "center",
-    paddingVertical: 8,
-    borderRadius: 8,
-  },
-  autofillBtnText: {
-    color: "#FFFFFF",
-    fontSize: 12,
-    fontWeight: "700",
-  },
   footerSection: {
     marginTop: 40,
     alignItems: "center",
-    paddingHorizontal: 16,
   },
   footerText: {
     fontSize: 12,

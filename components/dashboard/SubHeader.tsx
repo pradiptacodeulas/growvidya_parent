@@ -1,9 +1,10 @@
 import { LinearGradient } from "expo-linear-gradient";
-import { useNavigation, useRouter } from "expo-router";
+import { useRouter } from "expo-router";
 import { StatusBar } from "expo-status-bar";
-import { ChevronLeft } from "lucide-react-native";
-import React from "react";
+import { Check, ChevronDown, ChevronLeft } from "lucide-react-native";
+import React, { useMemo } from "react";
 import {
+  Image,
   Platform,
   StyleSheet,
   Text,
@@ -11,8 +12,13 @@ import {
   View,
   ViewStyle,
 } from "react-native";
+import { Menu, MenuOption, MenuOptions, MenuTrigger } from "react-native-popup-menu";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
-
+import { useDispatch, useSelector } from "react-redux";
+import { AppDispatch, RootState } from "@/redux/store";
+import { setSelectedStudentId } from "@/redux/home/homeSlice";
+import { fetchDashboardData, switchActiveStudent } from "@/redux/home/homeThunk";
+import { getAvatarUrl, resolveStudentId } from "@/services/apiClient";
 import { useAppTheme } from "@/theme";
 
 interface DashboardSubHeaderProps {
@@ -29,7 +35,6 @@ export default function DashboardSubHeader({
   style,
 }: DashboardSubHeaderProps) {
   const router = useRouter();
-  const navigation = useNavigation();
   const insets = useSafeAreaInsets();
   const { colors } = useAppTheme();
 
@@ -52,18 +57,26 @@ export default function DashboardSubHeader({
             title={title}
             isGradient={isGradient}
             router={router}
-            navigation={navigation}
             colors={colors}
           />
           {children}
         </LinearGradient>
       ) : (
-        <View style={[styles.headerWrapper, { paddingTop: insets.top, backgroundColor: colors.headerBg, borderBottomColor: colors.border }, style]}>
+        <View
+          style={[
+            styles.headerWrapper,
+            {
+              paddingTop: insets.top,
+              backgroundColor: colors.headerBg,
+              borderBottomColor: colors.border,
+            },
+            style,
+          ]}
+        >
           <HeaderContent
             title={title}
             isGradient={isGradient}
             router={router}
-            navigation={navigation}
             colors={colors}
           />
           {children}
@@ -77,15 +90,57 @@ function HeaderContent({
   title,
   isGradient,
   router,
-  navigation,
   colors,
 }: {
   title: string;
   isGradient?: boolean;
   router: any;
-  navigation: any;
   colors: any;
 }) {
+  const dispatch = useDispatch<AppDispatch>();
+  const { user } = useSelector((state: RootState) => state.auth);
+  const { dashboardData, selectedStudentId } = useSelector(
+    (state: RootState) => state.home
+  );
+
+  const activeChildId = resolveStudentId(
+    undefined,
+    selectedStudentId,
+    dashboardData,
+    user
+  );
+
+  const childrenList: any[] = useMemo(() => {
+    const raw = dashboardData?.parent_student || user?.children || [];
+    return Array.isArray(raw) ? raw : [];
+  }, [dashboardData?.parent_student, user?.children]);
+
+  const activeChild = useMemo(() => {
+    if (dashboardData?.student_details) return dashboardData.student_details;
+    if (activeChildId && childrenList.length > 0) {
+      const found = childrenList.find(
+        (c: any) => String(c.student_id || c.id) === String(activeChildId)
+      );
+      if (found) return found;
+    }
+    return user?.activeChild || childrenList[0] || null;
+  }, [dashboardData?.student_details, activeChildId, childrenList, user?.activeChild]);
+
+  const handleSelectChild = async (childId: string) => {
+    if (String(activeChildId) === String(childId)) return;
+    dispatch(setSelectedStudentId(String(childId)));
+    try {
+      router.setParams?.({ student_id: String(childId) });
+    } catch {
+      // Ignore if current route does not accept setParams
+    }
+    try {
+      await dispatch(switchActiveStudent(String(childId))).unwrap();
+    } catch {
+      dispatch(fetchDashboardData(String(childId)));
+    }
+  };
+
   return (
     <View style={styles.headerContainer}>
       {/* Left: Back Button */}
@@ -101,7 +156,14 @@ function HeaderContent({
         activeOpacity={0.7}
       >
         <View
-          style={[styles.iconCircle, { backgroundColor: isGradient ? "rgba(255,255,255,0.2)" : colors.surfaceSubtle }]}
+          style={[
+            styles.iconCircle,
+            {
+              backgroundColor: isGradient
+                ? "rgba(255,255,255,0.2)"
+                : colors.surfaceSubtle,
+            },
+          ]}
         >
           <ChevronLeft size={22} color={isGradient ? "#FFF" : colors.primary} />
         </View>
@@ -117,8 +179,111 @@ function HeaderContent({
         </Text>
       </View>
 
-      {/* Right: Empty View for Balance */}
-      <View style={styles.rightSpacer} />
+      {/* Right: Global Child Switcher across sub-screens */}
+      {activeChild && childrenList.length > 0 ? (
+        <Menu>
+          <MenuTrigger>
+            <View
+              style={[
+                styles.childTrigger,
+                {
+                  backgroundColor: isGradient
+                    ? "rgba(255,255,255,0.2)"
+                    : colors.surfaceSubtle,
+                  borderColor: isGradient ? "rgba(255,255,255,0.3)" : colors.border,
+                },
+              ]}
+            >
+              <Image
+                source={{
+                  uri: getAvatarUrl(activeChild.picture, activeChild.gender),
+                }}
+                style={styles.childTriggerAvatar}
+              />
+              {childrenList.length > 1 && (
+                <ChevronDown
+                  size={13}
+                  color={isGradient ? "#FFF" : colors.textSecondary}
+                />
+              )}
+            </View>
+          </MenuTrigger>
+
+          <MenuOptions
+            optionsContainerStyle={[
+              styles.childMenuContainer,
+              { backgroundColor: colors.cardBg, borderColor: colors.border },
+            ]}
+          >
+            <Text style={[styles.childMenuTitle, { color: colors.textMuted }]}>
+              SWITCH ACTIVE CHILD
+            </Text>
+            {childrenList.map((child: any) => {
+              const cid = String(child.student_id || child.id);
+              const isCurrent = String(activeChildId) === cid;
+              const isActiveStatus =
+                Number(child.student_status ?? child.status ?? 1) === 1;
+              const cName =
+                `${child.first_name || ""} ${child.last_name || ""}`.trim() ||
+                child.full_name ||
+                "Student";
+
+              return (
+                <MenuOption
+                  key={cid}
+                  onSelect={() => handleSelectChild(cid)}
+                  style={[
+                    styles.childMenuItem,
+                    isCurrent && { backgroundColor: colors.primaryLight },
+                  ]}
+                >
+                  <Image
+                    source={{ uri: getAvatarUrl(child.picture, child.gender) }}
+                    style={styles.childMenuAvatar}
+                  />
+                  <View style={{ flex: 1 }}>
+                    <View style={styles.childMenuNameRow}>
+                      <Text
+                        style={[styles.childMenuName, { color: colors.text }]}
+                        numberOfLines={1}
+                      >
+                        {cName}
+                      </Text>
+                      <View
+                        style={[
+                          styles.statusTag,
+                          {
+                            backgroundColor: isActiveStatus
+                              ? "rgba(16,185,129,0.14)"
+                              : "rgba(239,68,68,0.14)",
+                          },
+                        ]}
+                      >
+                        <Text
+                          style={{
+                            fontSize: 9.5,
+                            fontWeight: "800",
+                            color: isActiveStatus ? "#10B981" : "#EF4444",
+                          }}
+                        >
+                          {isActiveStatus ? "Active" : "Inactive"}
+                        </Text>
+                      </View>
+                    </View>
+                    <Text style={[styles.childMenuSub, { color: colors.textMuted }]}>
+                      Class {child.class_name || "-"}
+                      {child.section_name ? ` (${child.section_name})` : ""}
+                    </Text>
+                  </View>
+                  {isCurrent && <Check size={16} color={colors.primary} />}
+                </MenuOption>
+              );
+            })}
+          </MenuOptions>
+        </Menu>
+      ) : (
+        <View style={styles.rightSpacer} />
+      )}
     </View>
   );
 }
@@ -128,7 +293,7 @@ const styles = StyleSheet.create({
     backgroundColor: "transparent",
     borderBottomWidth: 1,
     borderBottomColor: "#f1f5f9",
-    overflow: "hidden", // Crucial for iOS rounded corners clipping
+    overflow: "hidden",
   },
   headerWrapperGradient: {
     borderBottomWidth: 0,
@@ -141,7 +306,7 @@ const styles = StyleSheet.create({
     height: 56,
   },
   backButton: {
-    width: 40,
+    width: 48,
     height: 40,
     alignItems: "flex-start",
     justifyContent: "center",
@@ -154,9 +319,6 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
   },
-  iconCircleGradient: {
-    backgroundColor: "rgba(255,255,255,0.2)",
-  },
   titleContainer: {
     flex: 2,
     alignItems: "center",
@@ -168,10 +330,76 @@ const styles = StyleSheet.create({
     color: "#1e293b",
     letterSpacing: -0.5,
   },
-  headerTitleGradient: {
-    color: "#FFF",
-  },
   rightSpacer: {
-    width: 40,
+    width: 48,
+  },
+  childTrigger: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 4,
+    paddingHorizontal: 6,
+    paddingVertical: 4,
+    borderRadius: 20,
+    borderWidth: 1,
+  },
+  childTriggerAvatar: {
+    width: 26,
+    height: 26,
+    borderRadius: 13,
+  },
+  childMenuContainer: {
+    padding: 8,
+    borderRadius: 16,
+    marginTop: 42,
+    width: 250,
+    borderWidth: 1,
+    ...Platform.select({
+      ios: {
+        shadowColor: "#000",
+        shadowOffset: { width: 0, height: 10 },
+        shadowOpacity: 0.12,
+        shadowRadius: 16,
+      },
+      android: { elevation: 12 },
+    }),
+  },
+  childMenuTitle: {
+    fontSize: 10,
+    fontWeight: "800",
+    letterSpacing: 0.6,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+  },
+  childMenuItem: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 10,
+    paddingVertical: 9,
+    paddingHorizontal: 10,
+    borderRadius: 12,
+  },
+  childMenuAvatar: {
+    width: 34,
+    height: 34,
+    borderRadius: 17,
+  },
+  childMenuNameRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+  },
+  childMenuName: {
+    fontSize: 13,
+    fontWeight: "700",
+    flexShrink: 1,
+  },
+  statusTag: {
+    paddingHorizontal: 6,
+    paddingVertical: 1.5,
+    borderRadius: 6,
+  },
+  childMenuSub: {
+    fontSize: 11,
+    marginTop: 1,
   },
 });

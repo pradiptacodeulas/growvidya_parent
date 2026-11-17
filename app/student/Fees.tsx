@@ -12,6 +12,7 @@ import * as IntentLauncher from "expo-intent-launcher";
 import * as Sharing from "expo-sharing";
 import * as Clipboard from "expo-clipboard";
 import * as ImagePicker from "expo-image-picker";
+import * as DocumentPicker from "expo-document-picker";
 import { LinearGradient } from "expo-linear-gradient";
 import {
   AlertCircle,
@@ -131,6 +132,7 @@ export default function FeesScreen() {
   const payBottomSheetRef = useRef<BottomSheetModal>(null);
   const paySnapPoints = useMemo(() => ["90%"], []);
   const [selectedPayInvoice, setSelectedPayInvoice] = useState<any>(null);
+  const [payAmountInput, setPayAmountInput] = useState("");
   const [receiptAsset, setReceiptAsset] = useState<any>(null);
   const [referenceNo, setReferenceNo] = useState("");
   const [paymentMethod, setPaymentMethod] = useState("UPI / QR Code");
@@ -345,6 +347,7 @@ export default function FeesScreen() {
     }
 
     setSelectedPayInvoice(invoice);
+    setPayAmountInput(String(amountToPay));
     setReceiptAsset(null);
     setReferenceNo("");
     setPaymentNotes("");
@@ -428,15 +431,47 @@ export default function FeesScreen() {
     }
   };
 
+  const handlePickReceiptPdf = async () => {
+    try {
+      const result = await DocumentPicker.getDocumentAsync({
+        type: ["application/pdf", "image/*"],
+        copyToCacheDirectory: true,
+      });
+      if (!result.canceled && result.assets && result.assets.length > 0) {
+        const picked = result.assets[0];
+        if (picked.size && picked.size > 5 * 1024 * 1024) {
+          Toast.show({
+            type: "error",
+            text1: "File Too Large",
+            text2: "Payment receipt file size must not exceed 5MB.",
+          });
+          return;
+        }
+        setReceiptAsset({
+          uri: picked.uri,
+          fileName: picked.name || `fee_receipt_${Date.now()}.pdf`,
+          mimeType: picked.mimeType || "application/pdf",
+          fileSize: picked.size,
+        });
+      }
+    } catch (err: any) {
+      Toast.show({
+        type: "error",
+        text1: "File Picker Error",
+        text2: err?.message || "Could not select PDF receipt.",
+      });
+    }
+  };
+
   const handleSubmitPaymentVerification = async () => {
     if (!selectedPayInvoice) return;
 
     const targetStudentId = resolveStudentId(params.student_id, selectedStudentId, dashboardData, user);
-    const amountToPay = parseFloat(
+    const maxDueAmount = parseFloat(
       selectedPayInvoice.due_amount || selectedPayInvoice.total_amount || selectedPayInvoice.fees || "0"
     );
 
-    if (amountToPay <= 0) {
+    if (maxDueAmount <= 0) {
       Toast.show({
         type: "info",
         text1: "Fee Already Paid",
@@ -445,11 +480,30 @@ export default function FeesScreen() {
       return;
     }
 
+    const amountToPay = parseFloat(String(payAmountInput || "").trim());
+    if (!amountToPay || Number.isNaN(amountToPay) || amountToPay <= 0) {
+      Toast.show({
+        type: "error",
+        text1: "Invalid Amount",
+        text2: "Please enter a valid payment amount greater than ₹0.",
+      });
+      return;
+    }
+
+    if (amountToPay > maxDueAmount) {
+      Toast.show({
+        type: "error",
+        text1: "Amount Exceeds Due",
+        text2: `Amount paid cannot exceed the pending due of ₹${maxDueAmount.toLocaleString("en-IN", { minimumFractionDigits: 2 })}.`,
+      });
+      return;
+    }
+
     if (!receiptAsset) {
       Toast.show({
         type: "error",
         text1: "Receipt Proof Required",
-        text2: "Please upload your payment screenshot or receipt before submitting.",
+        text2: "Please upload your payment screenshot, photo, or PDF receipt before submitting.",
       });
       return;
     }
@@ -461,7 +515,15 @@ export default function FeesScreen() {
       const uriParts = uri.split(".");
       const fileExt = (uriParts[uriParts.length - 1] || "jpg").toLowerCase().split("?")[0];
       const fileName = receiptAsset.fileName || `fee_receipt_${Date.now()}.${fileExt}`;
-      const mimeType = receiptAsset.mimeType || (fileExt === "png" ? "image/png" : "image/jpeg");
+      const mimeType =
+        receiptAsset.mimeType ||
+        (fileExt === "pdf"
+          ? "application/pdf"
+          : fileExt === "png"
+          ? "image/png"
+          : fileExt === "webp"
+          ? "image/webp"
+          : "image/jpeg");
 
       const formData = new FormData();
       formData.append("file", {
@@ -475,11 +537,12 @@ export default function FeesScreen() {
         body: formData,
       });
 
-      if (!uploadRes.success || !uploadRes.data?.file_path) {
+      const receiptFilePath =
+        uploadRes.data?.file_path || uploadRes.data?.url || uploadRes.data?.filePath;
+
+      if (!uploadRes.success || !receiptFilePath) {
         throw new Error(uploadRes.message || "Failed to upload payment receipt file.");
       }
-
-      const receiptFilePath = uploadRes.data.file_path;
 
       // 2. Submit payment record with receipt
       const bankDetails = feesData?.bank_details;
@@ -493,6 +556,7 @@ export default function FeesScreen() {
           referenceNo: referenceNo.trim() || `TXN-P-${Date.now()}`,
           bankName: bankDetails?.bank_name || null,
           receiptFile: receiptFilePath,
+          receipt_file: receiptFilePath,
           notes: paymentNotes.trim() || `Receipt uploaded for ${selectedPayInvoice.title || "School Fees"}`,
         }),
       });
@@ -2080,6 +2144,22 @@ export default function FeesScreen() {
                   </View>
                 </View>
 
+                {/* Amount Paid Input (Supports Custom / Partial Payment) */}
+                <Text style={[styles.formLabel, { color: colors.text, marginTop: 14 }]}>
+                  Amount Paid (₹) <Text style={{ color: "#EF4444" }}>*</Text>
+                </Text>
+                <BottomSheetTextInput
+                  style={[styles.formInput, { backgroundColor: colors.surfaceSubtle, borderColor: colors.border, color: colors.text, fontWeight: "700" }]}
+                  placeholder="Enter amount paid"
+                  placeholderTextColor={colors.textMuted}
+                  keyboardType="decimal-pad"
+                  value={payAmountInput}
+                  onChangeText={(txt) => setPayAmountInput(txt.replace(/[^0-9.]/g, ""))}
+                />
+                <Text style={{ fontSize: 11.5, color: colors.textMuted, marginTop: 4 }}>
+                  Max payable due: ₹{parseFloat(selectedPayInvoice?.due_amount || selectedPayInvoice?.total_amount || "0").toLocaleString("en-IN", { minimumFractionDigits: 2 })} (partial payment allowed)
+                </Text>
+
                 {/* Payment Method Selector */}
                 <Text style={[styles.formLabel, { color: colors.text, marginTop: 14 }]}>
                   Payment Mode Used <Text style={{ color: "#EF4444" }}>*</Text>
@@ -2127,33 +2207,62 @@ export default function FeesScreen() {
 
                 {/* Payment Receipt Upload */}
                 <Text style={[styles.formLabel, { color: colors.text, marginTop: 14 }]}>
-                  Payment Receipt Screenshot / Photo <Text style={{ color: "#EF4444" }}>*</Text>
+                  Payment Receipt Screenshot / PDF <Text style={{ color: "#EF4444" }}>*</Text>
                 </Text>
 
                 {receiptAsset ? (
                   <View style={[styles.receiptPreviewBox, { backgroundColor: colors.surfaceSubtle, borderColor: "#059669" }]}>
-                    <Image
-                      source={{ uri: receiptAsset.uri }}
-                      style={styles.receiptThumb}
-                      resizeMode="cover"
-                    />
+                    {String(receiptAsset.mimeType || "").toLowerCase().includes("pdf") ||
+                    /\.pdf$/i.test(String(receiptAsset.fileName || receiptAsset.uri || "")) ? (
+                      <View
+                        style={[
+                          styles.receiptThumb,
+                          {
+                            backgroundColor: isDark ? "rgba(239, 68, 68, 0.16)" : "#FEE2E2",
+                            alignItems: "center",
+                            justifyContent: "center",
+                            borderWidth: 1,
+                            borderColor: "#FCA5A5",
+                          },
+                        ]}
+                      >
+                        <FileText size={26} color="#DC2626" />
+                      </View>
+                    ) : (
+                      <Image
+                        source={{ uri: receiptAsset.uri }}
+                        style={styles.receiptThumb}
+                        resizeMode="cover"
+                      />
+                    )}
                     <View style={styles.receiptMetaCol}>
                       <View style={styles.receiptSuccessRow}>
                         <CheckCircle2 size={14} color="#059669" style={{ marginRight: 4 }} />
                         <Text style={styles.receiptSuccessText}>Receipt Attached</Text>
                       </View>
                       <Text style={[styles.receiptFileName, { color: colors.text }]} numberOfLines={1}>
-                        {receiptAsset.fileName || "receipt_screenshot.jpg"}
+                        {receiptAsset.fileName || "receipt_proof.jpg"}
                       </Text>
+                      {receiptAsset.fileSize ? (
+                        <Text style={{ fontSize: 11, color: colors.textMuted, marginBottom: 4 }}>
+                          {(Number(receiptAsset.fileSize) / 1024).toFixed(1)} KB
+                        </Text>
+                      ) : null}
                       <View style={styles.receiptActionsRow}>
                         <TouchableOpacity
                           style={[styles.receiptActionBtn, { borderColor: colors.border }]}
                           onPress={handlePickReceipt}
                         >
-                          <Text style={[styles.receiptActionBtnText, { color: colors.primary }]}>Change</Text>
+                          <Text style={[styles.receiptActionBtnText, { color: colors.primary }]}>Image</Text>
                         </TouchableOpacity>
                         <TouchableOpacity
-                          style={[styles.receiptActionBtn, { borderColor: "#FCA5A5", marginLeft: 8 }]}
+                          style={[styles.receiptActionBtn, { borderColor: colors.border, marginLeft: 6 }]}
+                          onPress={handlePickReceiptPdf}
+                        >
+                          <Text style={[styles.receiptActionBtnText, { color: colors.primary }]}>PDF</Text>
+                        </TouchableOpacity>
+                        <TouchableOpacity
+                          style={[styles.receiptActionBtn, { borderColor: "#FCA5A5", marginLeft: 6 }]}
                           onPress={() => setReceiptAsset(null)}
                         >
                           <Trash2 size={12} color="#EF4444" style={{ marginRight: 4 }} />
@@ -2171,7 +2280,7 @@ export default function FeesScreen() {
                       Upload Payment Receipt
                     </Text>
                     <Text style={[styles.uploadPromptSub, { color: colors.textSecondary }]}>
-                      Attach screenshot or photo of transaction confirmation
+                      Attach screenshot, photo, or PDF bank receipt (Max 5MB)
                     </Text>
 
                     <View style={styles.uploadButtonsRow}>
@@ -2231,6 +2340,40 @@ export default function FeesScreen() {
                         </View>
                       </TouchableOpacity>
                     </View>
+
+                    <TouchableOpacity
+                      style={[
+                        styles.uploadActionBtn,
+                        {
+                          marginTop: 10,
+                          width: "100%",
+                          backgroundColor: colors.cardBg,
+                          borderColor: isDark ? "rgba(239, 68, 68, 0.35)" : "#FECACA",
+                        },
+                      ]}
+                      onPress={handlePickReceiptPdf}
+                      activeOpacity={0.72}
+                    >
+                      <View
+                        style={[
+                          styles.uploadBtnIconBadge,
+                          { backgroundColor: isDark ? "rgba(239, 68, 68, 0.16)" : "#FEE2E2" },
+                        ]}
+                      >
+                        <FileText size={20} color="#DC2626" strokeWidth={2.2} />
+                      </View>
+                      <View style={styles.uploadBtnTextWrap}>
+                        <Text
+                          style={[styles.uploadBtnTitle, { color: colors.text }]}
+                          numberOfLines={1}
+                        >
+                          Upload PDF / Bank Receipt
+                        </Text>
+                        <Text style={[styles.uploadBtnSub, { color: colors.textSecondary }]}>
+                          Choose PDF or receipt file (Max 5MB)
+                        </Text>
+                      </View>
+                    </TouchableOpacity>
                   </View>
                 )}
 

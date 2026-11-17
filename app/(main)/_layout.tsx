@@ -8,6 +8,7 @@ import { Drawer } from "expo-router/drawer";
 import {
   Activity,
   Bed,
+  Bell,
   BookOpen,
   BookMarked,
   BriefcaseMedical,
@@ -107,7 +108,8 @@ export default function MainLayout() {
       { name: "ExamResult", title: "Exam Result", icon: GraduationCap, path: "/student/ExamResult" },
       { name: "StudyMaterial", title: "Study Material", icon: BookOpen, path: "/student/StudyMaterial" },
       { name: "Syllabus", title: "Syllabus", icon: BookMarked, path: "/student/Syllabus" },
-      { name: "Activity", title: "Activity & Notices", icon: Activity, path: "/student/Activity" },
+      { name: "NoticeBoard", title: "Notice Board", icon: Bell, path: "/student/NoticeBoard" },
+      { name: "Activity", title: "Student Activities", icon: Activity, path: "/student/Activity" },
       { name: "Events", title: "Events", icon: Calendar, path: "/student/Events" },
       { name: "Holidays", title: "Holidays", icon: CalendarDays, path: "/student/Holidays" },
       { name: "Transport", title: "Transport", icon: Car, path: "/student/Transport" },

@@ -94,7 +94,7 @@ const Profile: React.FC = () => {
       user?.postalCode || user?.postal_code,
     ]
       .filter(Boolean)
-      .join(", ") || "—";
+      .join(", ") || "N/A";
 
   const getProfileImage = () => {
     if (user?.picture) {
@@ -162,9 +162,6 @@ const Profile: React.FC = () => {
 
             <View style={styles.headerTextCol}>
               <Text style={[styles.headerTitle, { color: colors.text }]}>Parent Profile</Text>
-              <Text style={[styles.headerSubtitle, { color: colors.textSecondary }]} numberOfLines={1}>
-                View your personal identity and account details
-              </Text>
             </View>
           </View>
 
@@ -207,7 +204,7 @@ const Profile: React.FC = () => {
           ]}
         >
           <Avatar size={80} source={getProfileImage()} outline />
-          <Text style={[styles.name, { color: colors.text }]}>{fullName || "—"}</Text>
+          <Text style={[styles.name, { color: colors.text }]}>{fullName || "N/A"}</Text>
           {!!parentRelation && (
             <Text
               style={[
@@ -222,7 +219,7 @@ const Profile: React.FC = () => {
           <View style={[styles.gridContainer, { borderTopColor: colors.border }]}>
             <View style={styles.gridItem}>
               <Text style={[styles.gridLabel, { color: colors.textMuted }]}>Relation</Text>
-              <Text style={[styles.gridValue, { color: colors.text }]}>{parentRelation || "—"}</Text>
+              <Text style={[styles.gridValue, { color: colors.text }]}>{parentRelation || "N/A"}</Text>
             </View>
 
             <View style={[styles.columnDivider, { backgroundColor: colors.border }]} />
@@ -239,7 +236,7 @@ const Profile: React.FC = () => {
             <View style={styles.gridItem}>
               <Text style={[styles.gridLabel, { color: colors.textMuted }]}>Occupation</Text>
               <Text style={[styles.gridValue, { color: colors.text }]} numberOfLines={1}>
-                {user?.occupation || "—"}
+                {user?.occupation || "N/A"}
               </Text>
             </View>
           </View>
@@ -259,7 +256,7 @@ const Profile: React.FC = () => {
             <Ionicons name="person-outline" size={20} color={colors.primary} />
             <View style={styles.infoText}>
               <Text style={[styles.infoLabel, { color: colors.textMuted }]}>Full Name</Text>
-              <Text style={[styles.infoValue, { color: colors.text }]}>{fullName || "—"}</Text>
+              <Text style={[styles.infoValue, { color: colors.text }]}>{fullName || "N/A"}</Text>
             </View>
           </View>
 
@@ -271,7 +268,7 @@ const Profile: React.FC = () => {
             <View style={styles.infoText}>
               <Text style={[styles.infoLabel, { color: colors.textMuted }]}>Email Address</Text>
               <Text style={[styles.infoValue, { color: colors.text }]}>
-                {user?.email || user?.email_address || "—"}
+                {user?.email || user?.email_address || "N/A"}
               </Text>
             </View>
           </View>
@@ -284,7 +281,7 @@ const Profile: React.FC = () => {
             <View style={styles.infoText}>
               <Text style={[styles.infoLabel, { color: colors.textMuted }]}>Phone Number</Text>
               <Text style={[styles.infoValue, { color: colors.text }]}>
-                {user?.phone || user?.primary_contact_number || "—"}
+                {user?.phone || user?.primary_contact_number || "N/A"}
               </Text>
             </View>
           </View>
@@ -297,7 +294,7 @@ const Profile: React.FC = () => {
             <View style={styles.infoText}>
               <Text style={[styles.infoLabel, { color: colors.textMuted }]}>School Name</Text>
               <Text style={[styles.infoValue, { color: colors.text }]}>
-                {user?.schoolName || user?.school_name || "—"}
+                {user?.schoolName || user?.school_name || "N/A"}
               </Text>
             </View>
           </View>
@@ -311,7 +308,7 @@ const Profile: React.FC = () => {
               <View style={styles.infoText}>
                 <Text style={[styles.infoLabel, { color: colors.textMuted }]}>Occupation</Text>
                 <Text style={[styles.infoValue, { color: colors.text }]} numberOfLines={1}>
-                  {user?.occupation || "—"}
+                  {user?.occupation || "N/A"}
                 </Text>
               </View>
             </View>
@@ -323,7 +320,7 @@ const Profile: React.FC = () => {
               <View style={styles.infoText}>
                 <Text style={[styles.infoLabel, { color: colors.textMuted }]}>Parent Type</Text>
                 <Text style={[styles.infoValue, { color: colors.text }]}>
-                  {parentRelation || "—"}
+                  {parentRelation || "N/A"}
                 </Text>
               </View>
             </View>
@@ -430,7 +427,7 @@ const Profile: React.FC = () => {
           activeOpacity={0.8}
         >
           <Ionicons name="log-out-outline" size={20} color="#EF4444" />
-          <Text style={styles.logoutText}>Sign Out from GrowVidya</Text>
+          <Text style={styles.logoutText}>Sign Out</Text>
         </TouchableOpacity>
       </ScrollView>
     </SafeAreaView>

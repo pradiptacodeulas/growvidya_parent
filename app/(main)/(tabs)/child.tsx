@@ -70,6 +70,7 @@ const StudentsTab = () => {
     { id: "2", title: "Fees", color: "#10B981", icon: "wallet", family: "AntDesign" },
     { id: "3", title: "Attendance", color: "#F59E0B", icon: "calendar", family: "AntDesign" },
     { id: "4", title: "Exam Result", color: "#3B82F6", icon: "book", family: "AntDesign" },
+    { id: "14", title: "Notice Board", color: "#4F46E5", icon: "bell", family: "FontAwesome" },
     { id: "5", title: "Activity", color: "#8B5CF6", icon: "tasks", family: "FontAwesome" },
     { id: "6", title: "Events", color: "#0EA5E9", icon: "calendar", family: "FontAwesome" },
     { id: "7", title: "Transport", color: "#EC4899", icon: "car", family: "AntDesign" },

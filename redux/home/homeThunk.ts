@@ -1,7 +1,7 @@
 import { createAsyncThunk } from "@reduxjs/toolkit";
 import { RootState } from "../store";
 import { apiFetch, setAuthToken } from "@/services/apiClient";
-import { storeData } from "@/utils/asyncStorage";
+import { switchStudent } from "../auth/authThunk";
 
 export const fetchDashboardData = createAsyncThunk(
   "home/fetchDashboardData",
@@ -124,21 +124,16 @@ export const switchActiveStudent = createAsyncThunk(
   "home/switchActiveStudent",
   async (studentId: string | number, { dispatch, rejectWithValue }) => {
     try {
-      const response = await apiFetch("/parent/auth/switch-student", {
-        method: "POST",
-        body: JSON.stringify({ student_id: Number(studentId) }),
-      });
+      const switchRes = await dispatch(switchStudent(studentId)).unwrap();
 
-      if (!response.success || !response.data) {
-        throw new Error(response.message || "Failed to switch active student");
-      }
-
-      // Refresh dashboard with newly switched active child
+      // Refresh dashboard with newly switched active child & updated JWT
       await dispatch(fetchDashboardData(String(studentId)));
 
-      return response.data;
+      return switchRes;
     } catch (error: any) {
-      return rejectWithValue(error.message || "Failed to switch student");
+      return rejectWithValue(
+        typeof error === "string" ? error : error?.message || "Failed to switch student"
+      );
     }
   }
 );
@@ -268,6 +263,49 @@ export const fetchChildHolidays = createAsyncThunk(
     } catch (error: any) {
       return rejectWithValue(
         error.message || "An unexpected error occurred while fetching holidays"
+      );
+    }
+  }
+);
+
+export const fetchAcademicYears = createAsyncThunk(
+  "home/fetchAcademicYears",
+  async (_, { getState, rejectWithValue }) => {
+    const state = getState() as RootState;
+    const token = state.auth.token;
+
+    if (token) {
+      setAuthToken(token);
+    }
+
+    try {
+      const response = await apiFetch("/parent/child/academic-years", {
+        method: "GET",
+      });
+
+      if (!response.success) {
+        return rejectWithValue(response.message || "Failed to fetch academic years");
+      }
+
+      const raw = response.data?.data || response.data || [];
+      const list = Array.isArray(raw) ? raw : [];
+      const activeObj =
+        list.find(
+          (y: any) =>
+            Number(y.is_current) === 1 ||
+            String(y.is_current) === "1" ||
+            Boolean(y.isCurrent)
+        ) || list[0];
+      const activeLabel =
+        activeObj?.academic_year ||
+        activeObj?.academic_year_name ||
+        activeObj?.name ||
+        "";
+
+      return { list, activeLabel };
+    } catch (error: any) {
+      return rejectWithValue(
+        error.message || "Failed to fetch academic years"
       );
     }
   }

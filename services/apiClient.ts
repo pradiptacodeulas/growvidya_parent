@@ -245,6 +245,7 @@ export const apiFetch = async (
 
   const headers: Record<string, string> = {
     Accept: "application/json",
+    "X-Portal-Type": "ParentPortal",
     ...(isFormData ? {} : { "Content-Type": "application/json" }),
     ...(options.headers as Record<string, string>),
   };

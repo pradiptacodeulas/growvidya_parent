@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from "react";
+import React, { useState, useEffect, useCallback, useMemo } from "react";
 import {
   StyleSheet,
   Text,
@@ -36,10 +36,12 @@ interface RoutinePeriod {
 interface DayItem {
   id: number | string;
   day_name: string;
+  status?: number | string;
 }
 
 const formatTimeStr = (timeStr?: string) => {
   if (!timeStr) return "";
+  if (timeStr.includes("AM") || timeStr.includes("PM")) return timeStr;
   const [hoursStr, minutesStr] = String(timeStr).split(":");
   const hours = parseInt(hoursStr, 10);
   if (isNaN(hours)) return timeStr;
@@ -61,15 +63,28 @@ export default function Timetable() {
   const params = useLocalSearchParams<{ student_id?: string }>();
   const dispatch = useDispatch<AppDispatch>();
   const { user } = useSelector((state: RootState) => state.auth);
-  const { dashboardData, selectedStudentId } = useSelector((state: RootState) => state.home);
+  const { dashboardData, selectedStudentId } = useSelector(
+    (state: RootState) => state.home
+  );
 
   const [routines, setRoutines] = useState<RoutinePeriod[]>([]);
   const [days, setDays] = useState<DayItem[]>([]);
+  const [selectedDay, setSelectedDay] = useState<string>("all");
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const targetStudentId = resolveStudentId(params.student_id, selectedStudentId, dashboardData, user);
+  const todayDayName = useMemo(
+    () => new Date().toLocaleDateString("en-US", { weekday: "long" }),
+    []
+  );
+
+  const targetStudentId = resolveStudentId(
+    params.student_id,
+    selectedStudentId,
+    dashboardData,
+    user
+  );
 
   useEffect(() => {
     if (!targetStudentId && !dashboardData) {
@@ -86,16 +101,24 @@ export default function Timetable() {
       }
       setError(null);
       try {
-        const activeId = resolveStudentId(params.student_id, selectedStudentId, dashboardData, user);
+        const activeId = resolveStudentId(
+          params.student_id,
+          selectedStudentId,
+          dashboardData,
+          user
+        );
         if (!activeId) {
           setLoading(false);
           setRefreshing(false);
           return;
         }
 
-        const response = await apiFetch(`/parent/child/timetable?student_id=${activeId}`, {
-          method: "GET",
-        });
+        const response = await apiFetch(
+          `/parent/child/timetable?student_id=${activeId}`,
+          {
+            method: "GET",
+          }
+        );
 
         if (!response.success) {
           throw new Error(response.message || "Failed to load routine");
@@ -107,11 +130,15 @@ export default function Timetable() {
           : Array.isArray(payload?.routines)
           ? payload.routines
           : [];
-        const dayList: DayItem[] = Array.isArray(payload?.days) ? payload.days : [];
+        const rawDays: DayItem[] = Array.isArray(payload?.days)
+          ? payload.days.filter(
+              (d: DayItem) => d.status === undefined || Number(d.status) === 1
+            )
+          : [];
         setRoutines(routineList);
 
-        if (dayList.length > 0) {
-          setDays(dayList);
+        if (rawDays.length > 0) {
+          setDays(rawDays);
         } else {
           const daysOrder = [
             "Monday",
@@ -125,7 +152,9 @@ export default function Timetable() {
           const derivedDays: DayItem[] = [];
           daysOrder.forEach((dName, idx) => {
             const hasDay = routineList.some(
-              (r) => String(r.day_name || "").trim().toLowerCase() === dName.toLowerCase()
+              (r) =>
+                String(r.day_name || "").trim().toLowerCase() ===
+                dName.toLowerCase()
             );
             if (hasDay) {
               derivedDays.push({ id: idx + 1, day_name: dName });
@@ -147,41 +176,159 @@ export default function Timetable() {
     loadTimetable();
   }, [loadTimetable]);
 
-  const getDayPeriods = (dayObj: DayItem) => {
-    const targetId = Number(dayObj.id);
-    const targetName = String(dayObj.day_name || "").trim().toLowerCase();
-    return routines.filter((r) => {
-      if (r.day !== undefined && r.day !== null && Number(r.day) === targetId) return true;
-      if (r.day_id !== undefined && r.day_id !== null && Number(r.day_id) === targetId) return true;
-      if (targetName && r.day_name && String(r.day_name).trim().toLowerCase() === targetName) {
-        return true;
-      }
-      return false;
-    });
-  };
+  const getDayPeriods = useCallback(
+    (dayObj: DayItem) => {
+      const targetId = Number(dayObj.id);
+      const targetName = String(dayObj.day_name || "")
+        .trim()
+        .toLowerCase();
+      return routines
+        .filter((r) => {
+          if (r.day !== undefined && r.day !== null && Number(r.day) === targetId)
+            return true;
+          if (
+            r.day_id !== undefined &&
+            r.day_id !== null &&
+            Number(r.day_id) === targetId
+          )
+            return true;
+          if (
+            targetName &&
+            r.day_name &&
+            String(r.day_name).trim().toLowerCase() === targetName
+          ) {
+            return true;
+          }
+          return false;
+        })
+        .sort((a, b) =>
+          String(a.start_time || "").localeCompare(String(b.start_time || ""))
+        );
+    },
+    [routines]
+  );
+
+  const visibleDays = useMemo(() => {
+    if (selectedDay === "all") return days;
+    return days.filter((d) => String(d.id) === String(selectedDay));
+  }, [days, selectedDay]);
 
   return (
     <View style={[styles.container, { backgroundColor: colors.background }]}>
       <SubHeader title="Class Routine" />
 
+      {/* Day Filter Pills matching ParentTimetable.jsx */}
+      {days.length > 0 && !loading && !error && (
+        <View style={[styles.dayFilterBar, { borderBottomColor: colors.border }]}>
+          <ScrollView
+            horizontal
+            showsHorizontalScrollIndicator={false}
+            contentContainerStyle={styles.dayFilterScroll}
+          >
+            <TouchableOpacity
+              onPress={() => setSelectedDay("all")}
+              activeOpacity={0.8}
+              style={[
+                styles.dayChip,
+                {
+                  backgroundColor:
+                    selectedDay === "all" ? colors.primary : colors.cardBg,
+                  borderColor:
+                    selectedDay === "all" ? colors.primary : colors.border,
+                },
+              ]}
+            >
+              <Text
+                style={[
+                  styles.dayChipText,
+                  {
+                    color:
+                      selectedDay === "all" ? "#FFFFFF" : colors.textSecondary,
+                  },
+                ]}
+              >
+                All Days ({routines.length})
+              </Text>
+            </TouchableOpacity>
+
+            {days.map((d) => {
+              const count = getDayPeriods(d).length;
+              const isSelected = String(selectedDay) === String(d.id);
+              const isToday =
+                String(d.day_name || "").trim().toLowerCase() ===
+                todayDayName.toLowerCase();
+
+              return (
+                <TouchableOpacity
+                  key={d.id}
+                  onPress={() => setSelectedDay(String(d.id))}
+                  activeOpacity={0.8}
+                  style={[
+                    styles.dayChip,
+                    {
+                      backgroundColor: isSelected ? colors.primary : colors.cardBg,
+                      borderColor: isSelected
+                        ? colors.primary
+                        : isToday
+                        ? "#F59E0B"
+                        : colors.border,
+                    },
+                  ]}
+                >
+                  <Text
+                    style={[
+                      styles.dayChipText,
+                      {
+                        color: isSelected ? "#FFFFFF" : colors.textSecondary,
+                      },
+                    ]}
+                  >
+                    {d.day_name} ({count})
+                  </Text>
+                  {isToday && (
+                    <View style={styles.todayMiniTag}>
+                      <Text style={styles.todayMiniTagText}>Today</Text>
+                    </View>
+                  )}
+                </TouchableOpacity>
+              );
+            })}
+          </ScrollView>
+        </View>
+      )}
+
       {loading && !refreshing ? (
         <View style={[styles.loadingContainer, { backgroundColor: colors.background }]}>
           <ActivityIndicator size="large" color={colors.primary} />
-          <Text style={[styles.loadingText, { color: colors.textMuted }]}>Loading routine...</Text>
+          <Text style={[styles.loadingText, { color: colors.textMuted }]}>
+            Loading routine...
+          </Text>
         </View>
       ) : error ? (
         <View style={[styles.errorContainer, { backgroundColor: colors.background }]}>
-          <View style={[styles.emptyIconCircle, { backgroundColor: "rgba(239, 68, 68, 0.1)" }]}>
+          <View
+            style={[
+              styles.emptyIconCircle,
+              { backgroundColor: "rgba(239, 68, 68, 0.1)" },
+            ]}
+          >
             <Ionicons name="alert-circle-outline" size={48} color="#EF4444" />
           </View>
-          <Text style={[styles.emptyTitle, { color: colors.text }]}>Failed to Load Routine</Text>
+          <Text style={[styles.emptyTitle, { color: colors.text }]}>
+            Failed to Load Routine
+          </Text>
           <Text style={[styles.errorText, { color: colors.textMuted }]}>{error}</Text>
           <TouchableOpacity
             style={[styles.emptyRetryButton, { backgroundColor: colors.primary }]}
             onPress={() => loadTimetable()}
             activeOpacity={0.8}
           >
-            <Ionicons name="refresh" size={16} color="#FFFFFF" style={{ marginRight: 6 }} />
+            <Ionicons
+              name="refresh"
+              size={16}
+              color="#FFFFFF"
+              style={{ marginRight: 6 }}
+            />
             <Text style={styles.emptyRetryButtonText}>Try Again</Text>
           </TouchableOpacity>
         </View>
@@ -202,17 +349,33 @@ export default function Timetable() {
             />
           }
         >
-          {days.length > 0 ? (
-            days.map((dayData) => {
+          {visibleDays.length > 0 ? (
+            visibleDays.map((dayData) => {
               const periods = getDayPeriods(dayData);
+              const isToday =
+                String(dayData.day_name || "").trim().toLowerCase() ===
+                todayDayName.toLowerCase();
+
               return (
                 <View key={dayData.id} style={styles.daySection}>
                   <View style={styles.dayHeader}>
-                    <View style={[styles.dayBadge, { backgroundColor: colors.primary }]}>
-                      <Text style={styles.dayHeaderText}>{dayData.day_name}</Text>
+                    <View style={styles.dayHeaderLeft}>
+                      <View
+                        style={[
+                          styles.dayBadge,
+                          { backgroundColor: colors.primary },
+                        ]}
+                      >
+                        <Text style={styles.dayHeaderText}>{dayData.day_name}</Text>
+                      </View>
+                      {isToday && (
+                        <View style={styles.todayPill}>
+                          <Text style={styles.todayPillText}>Today</Text>
+                        </View>
+                      )}
                     </View>
                     <Text style={[styles.classCount, { color: colors.textMuted }]}>
-                      {periods.length} {periods.length === 1 ? "Class" : "Classes"}
+                      {periods.length} {periods.length === 1 ? "Period" : "Periods"}
                     </Text>
                   </View>
 
@@ -223,8 +386,12 @@ export default function Timetable() {
                   >
                     {periods.length > 0 ? (
                       periods.map((cls, idx) => {
-                        const periodLabel = cls.period_name || cls.period || `P${idx + 1}`;
-                        const timeLabel = formatPeriodTime(cls.start_time, cls.end_time);
+                        const periodLabel =
+                          cls.period_name || cls.period || `P${idx + 1}`;
+                        const timeLabel = formatPeriodTime(
+                          cls.start_time,
+                          cls.end_time
+                        );
                         const teacherName = (cls.teacher_name || "").trim();
                         const classSection = [cls.class_name, cls.section_name]
                           .filter(Boolean)
@@ -235,15 +402,26 @@ export default function Timetable() {
                             key={`${dayData.id}-${cls.id || idx}`}
                             style={[
                               styles.card,
-                              { backgroundColor: colors.cardBg, borderColor: colors.border },
+                              {
+                                backgroundColor: colors.cardBg,
+                                borderColor: isToday
+                                  ? colors.primary
+                                  : colors.border,
+                              },
                             ]}
                           >
                             <View
-                              style={[styles.accentBar, { backgroundColor: colors.primary }]}
+                              style={[
+                                styles.accentBar,
+                                { backgroundColor: colors.primary },
+                              ]}
                             />
                             <View style={styles.cardContent}>
                               <View
-                                style={[styles.cardHeader, { borderBottomColor: colors.border }]}
+                                style={[
+                                  styles.cardHeader,
+                                  { borderBottomColor: colors.border },
+                                ]}
                               >
                                 <View
                                   style={[
@@ -252,7 +430,10 @@ export default function Timetable() {
                                   ]}
                                 >
                                   <Text
-                                    style={[styles.periodText, { color: colors.primary }]}
+                                    style={[
+                                      styles.periodText,
+                                      { color: colors.primary },
+                                    ]}
                                   >
                                     {periodLabel}
                                   </Text>
@@ -263,7 +444,12 @@ export default function Timetable() {
                                     size={14}
                                     color={colors.textMuted}
                                   />
-                                  <Text style={[styles.timeText, { color: colors.textMuted }]}>
+                                  <Text
+                                    style={[
+                                      styles.timeText,
+                                      { color: colors.textMuted },
+                                    ]}
+                                  >
                                     {timeLabel}
                                   </Text>
                                 </View>
@@ -284,7 +470,12 @@ export default function Timetable() {
                                     />
                                   </View>
                                   <View style={styles.textStack}>
-                                    <Text style={[styles.label, { color: colors.textMuted }]}>
+                                    <Text
+                                      style={[
+                                        styles.label,
+                                        { color: colors.textMuted },
+                                      ]}
+                                    >
                                       {teacherName ? "Teacher" : "Class"}
                                     </Text>
                                     <Text
@@ -301,12 +492,24 @@ export default function Timetable() {
 
                                 <View style={styles.infoRow}>
                                   <View
-                                    style={[styles.iconCircle, { backgroundColor: "#e8f5e9" }]}
+                                    style={[
+                                      styles.iconCircle,
+                                      { backgroundColor: "#e8f5e9" },
+                                    ]}
                                   >
-                                    <Ionicons name="book" size={16} color="#4caf50" />
+                                    <Ionicons
+                                      name="book"
+                                      size={16}
+                                      color="#4caf50"
+                                    />
                                   </View>
                                   <View style={styles.textStack}>
-                                    <Text style={[styles.label, { color: colors.textMuted }]}>
+                                    <Text
+                                      style={[
+                                        styles.label,
+                                        { color: colors.textMuted },
+                                      ]}
+                                    >
                                       Subject
                                     </Text>
                                     <Text
@@ -351,22 +554,38 @@ export default function Timetable() {
           ) : (
             <View style={styles.emptyContainer}>
               <View
-                style={[styles.emptyIconCircle, { backgroundColor: colors.primaryLight }]}
+                style={[
+                  styles.emptyIconCircle,
+                  { backgroundColor: colors.primaryLight },
+                ]}
               >
-                <Ionicons name="calendar-outline" size={48} color={colors.primary} />
+                <Ionicons
+                  name="calendar-outline"
+                  size={48}
+                  color={colors.primary}
+                />
               </View>
               <Text style={[styles.emptyTitle, { color: colors.text }]}>
                 No Class Routine Available
               </Text>
               <Text style={[styles.emptySubtitle, { color: colors.textMuted }]}>
-                No class routines or periods have been assigned in this student's timetable yet.
+                No class routines or periods have been assigned in this student's
+                timetable yet.
               </Text>
               <TouchableOpacity
-                style={[styles.emptyRetryButton, { backgroundColor: colors.primary }]}
+                style={[
+                  styles.emptyRetryButton,
+                  { backgroundColor: colors.primary },
+                ]}
                 onPress={() => loadTimetable(true)}
                 activeOpacity={0.8}
               >
-                <Ionicons name="refresh" size={16} color="#FFFFFF" style={{ marginRight: 6 }} />
+                <Ionicons
+                  name="refresh"
+                  size={16}
+                  color="#FFFFFF"
+                  style={{ marginRight: 6 }}
+                />
                 <Text style={styles.emptyRetryButtonText}>Refresh Schedule</Text>
               </TouchableOpacity>
             </View>
@@ -380,6 +599,38 @@ export default function Timetable() {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
+  },
+  dayFilterBar: {
+    borderBottomWidth: 1,
+    paddingVertical: 10,
+  },
+  dayFilterScroll: {
+    paddingHorizontal: 16,
+    gap: 8,
+  },
+  dayChip: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+    paddingHorizontal: 13,
+    paddingVertical: 7,
+    borderRadius: 999,
+    borderWidth: 1,
+  },
+  dayChipText: {
+    fontSize: 12.5,
+    fontWeight: "700",
+  },
+  todayMiniTag: {
+    backgroundColor: "#F59E0B",
+    paddingHorizontal: 6,
+    paddingVertical: 1.5,
+    borderRadius: 6,
+  },
+  todayMiniTagText: {
+    color: "#111827",
+    fontSize: 9.5,
+    fontWeight: "800",
   },
   scrollContent: {
     paddingVertical: 15,
@@ -398,6 +649,11 @@ const styles = StyleSheet.create({
     marginBottom: 15,
     paddingHorizontal: 20,
   },
+  dayHeaderLeft: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+  },
   dayBadge: {
     paddingVertical: 6,
     paddingHorizontal: 16,
@@ -407,6 +663,19 @@ const styles = StyleSheet.create({
     fontSize: 15,
     fontWeight: "800",
     color: "#fff",
+  },
+  todayPill: {
+    backgroundColor: "#FEF3C7",
+    borderWidth: 1,
+    borderColor: "#F59E0B",
+    paddingHorizontal: 9,
+    paddingVertical: 3,
+    borderRadius: 999,
+  },
+  todayPillText: {
+    color: "#B45309",
+    fontSize: 11,
+    fontWeight: "800",
   },
   classCount: {
     fontSize: 12,

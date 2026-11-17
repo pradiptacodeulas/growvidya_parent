@@ -43,6 +43,7 @@ const EditProfile = () => {
     country: user?.country || "",
     state: user?.state || "",
     city: user?.city || "",
+    postal_code: user?.postalCode || user?.postal_code || "",
   });
 
   const [countries, setCountries] = useState<any[]>([]);
@@ -69,6 +70,7 @@ const EditProfile = () => {
         country: user.country || prev.country,
         state: user.state || prev.state,
         city: user.city || prev.city,
+        postal_code: user.postalCode || user.postal_code || prev.postal_code,
       }));
     }
   }, [user]);
@@ -341,6 +343,20 @@ const EditProfile = () => {
             placeholder="Occupation"
             placeholderTextColor={colors.textMuted}
           />
+
+          <InputLabel label="Registered Email (Read-only)" colors={colors} />
+          <TextInput
+            style={[styles.input, { backgroundColor: colors.surfaceSubtle, borderColor: colors.border, color: colors.textSecondary }]}
+            value={user?.email || "N/A"}
+            editable={false}
+          />
+
+          <InputLabel label="Registered Phone (Read-only)" colors={colors} />
+          <TextInput
+            style={[styles.input, { backgroundColor: colors.surfaceSubtle, borderColor: colors.border, color: colors.textSecondary, marginBottom: 4 }]}
+            value={user?.phone || "N/A"}
+            editable={false}
+          />
         </View>
 
         <View style={[styles.formCard, { backgroundColor: colors.cardBg, borderColor: colors.border, marginTop: 20 }]}>
@@ -402,6 +418,18 @@ const EditProfile = () => {
             </Text>
             <ChevronDown size={18} color={colors.textMuted} />
           </TouchableOpacity>
+
+          <InputLabel label="Postal / PIN Code" colors={colors} />
+          <TextInput
+            style={[styles.input, { backgroundColor: colors.inputBg, borderColor: colors.border, color: colors.text, marginBottom: 4 }]}
+            value={formData.postal_code}
+            onChangeText={(text) =>
+              setFormData({ ...formData, postal_code: text })
+            }
+            placeholder="Enter Postal / PIN Code"
+            placeholderTextColor={colors.textMuted}
+            keyboardType="number-pad"
+          />
         </View>
 
         <TouchableOpacity

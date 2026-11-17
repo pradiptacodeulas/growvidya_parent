@@ -8,7 +8,7 @@ import SchedulesCard from "@/components/dashboard/SchedulesCard";
 import TodaysClass from "@/components/dashboard/TodaysClass";
 import ChildCards from "@/components/tabs/ChildCards";
 import { setSelectedStudentId } from "@/redux/home/homeSlice";
-import { fetchDashboardData, fetchExamResult } from "@/redux/home/homeThunk";
+import { fetchDashboardData, fetchExamResult, switchActiveStudent } from "@/redux/home/homeThunk";
 import { AppDispatch, RootState } from "@/redux/store";
 import { AntDesign } from "@expo/vector-icons";
 import { useRouter } from "expo-router";
@@ -26,6 +26,7 @@ import { useDispatch, useSelector } from "react-redux";
 
 import { useAppTheme } from "@/theme";
 import { getAvatarUrl, resolveStudentId } from "@/services/apiClient";
+import { stripHtmlPreview } from "@/utils/html";
 
 const Dashboard: React.FC = () => {
   const router = useRouter();
@@ -80,6 +81,13 @@ const Dashboard: React.FC = () => {
       color: "#3B82F6",
       icon: "book",
       family: "AntDesign",
+    },
+    {
+      id: "15",
+      title: "Notice Board",
+      color: "#4F46E5",
+      icon: "bell",
+      family: "FontAwesome",
     },
     {
       id: "5",
@@ -187,10 +195,14 @@ const Dashboard: React.FC = () => {
     }
   }, [dashboardData, selectedStudentId, user?.id, dispatch]);
 
-  const handleSelectStudent = (studentId: string) => {
+  const handleSelectStudent = async (studentId: string) => {
     if (studentId !== String(selectedStudentId)) {
       dispatch(setSelectedStudentId(studentId));
-      dispatch(fetchDashboardData(studentId));
+      try {
+        await dispatch(switchActiveStudent(studentId)).unwrap();
+      } catch {
+        dispatch(fetchDashboardData(studentId));
+      }
     }
   };
 
@@ -587,13 +599,52 @@ const Dashboard: React.FC = () => {
                   : null
               }
             />
-            <View style={styles.onlineStatus} />
+            <View
+              style={[
+                styles.onlineStatus,
+                {
+                  backgroundColor:
+                    Number(selectedStudent?.student_status ?? selectedStudent?.status ?? 1) === 1
+                      ? "#10B981"
+                      : "#EF4444",
+                },
+              ]}
+            />
           </View>
           <View style={{ flex: 1 }}>
-            <View style={[styles.idBadge, { backgroundColor: colors.primaryLight }]}>
-              <Text style={[styles.idText, { color: colors.primary }]}>
-                ID: {selectedStudent?.admission_number || "N/A"}
-              </Text>
+            <View style={{ flexDirection: "row", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+              <View style={[styles.idBadge, { backgroundColor: colors.primaryLight }]}>
+                <Text style={[styles.idText, { color: colors.primary }]}>
+                  ID: {selectedStudent?.admission_number || "N/A"}
+                </Text>
+              </View>
+              <View
+                style={[
+                  styles.idBadge,
+                  {
+                    backgroundColor:
+                      Number(selectedStudent?.student_status ?? selectedStudent?.status ?? 1) === 1
+                        ? "rgba(16, 185, 129, 0.14)"
+                        : "rgba(239, 68, 68, 0.14)",
+                  },
+                ]}
+              >
+                <Text
+                  style={[
+                    styles.idText,
+                    {
+                      color:
+                        Number(selectedStudent?.student_status ?? selectedStudent?.status ?? 1) === 1
+                          ? "#10B981"
+                          : "#EF4444",
+                    },
+                  ]}
+                >
+                  {Number(selectedStudent?.student_status ?? selectedStudent?.status ?? 1) === 1
+                    ? "Active"
+                    : "Inactive"}
+                </Text>
+              </View>
             </View>
             <Text
               style={[styles.studentName, { color: colors.text }]}
@@ -653,6 +704,145 @@ const Dashboard: React.FC = () => {
         <SchedulesCard exams={schedules} />
 
         <TodaysClass classes={classes} />
+
+        {/* School Notices & Announcements Widget */}
+        <View
+          style={[
+            styles.tableWrapper,
+            { backgroundColor: colors.cardBg, borderColor: colors.border, marginBottom: 4 },
+          ]}
+        >
+          <View
+            style={[
+              styles.tableHeader,
+              {
+                backgroundColor: colors.surfaceSubtle,
+                borderBottomColor: colors.border,
+                flexDirection: "row",
+                justifyContent: "space-between",
+                alignItems: "center",
+              },
+            ]}
+          >
+            <Text style={[styles.tableTitle, { color: colors.text, fontSize: 16 }]}>
+              School Notices & Announcements
+            </Text>
+            <TouchableOpacity
+              onPress={() => {
+                const currentStudentId = resolveStudentId(
+                  undefined,
+                  selectedStudentId,
+                  dashboardData,
+                  user
+                );
+                router.push({
+                  pathname: "/student/NoticeBoard",
+                  params: currentStudentId ? { student_id: String(currentStudentId) } : {},
+                } as any);
+              }}
+              style={{
+                paddingHorizontal: 12,
+                paddingVertical: 5,
+                borderRadius: 999,
+                backgroundColor: colors.primaryLight,
+              }}
+            >
+              <Text style={{ fontSize: 12, fontWeight: "700", color: colors.primary }}>
+                View All
+              </Text>
+            </TouchableOpacity>
+          </View>
+
+          <View style={{ padding: 16, gap: 12 }}>
+            {Array.isArray(dashboardData?.notices) && dashboardData.notices.length > 0 ? (
+              dashboardData.notices.slice(0, 4).map((notice: any, idx: number) => {
+                const rawDate = notice.publish_on || notice.notice_date || notice.created_at || "";
+                const dateLabel = rawDate
+                  ? String(rawDate).split("T")[0].split(" ")[0]
+                  : "";
+                return (
+                  <TouchableOpacity
+                    key={notice.id || idx}
+                    activeOpacity={0.8}
+                    onPress={() => {
+                      const currentStudentId = resolveStudentId(
+                        undefined,
+                        selectedStudentId,
+                        dashboardData,
+                        user
+                      );
+                      router.push({
+                        pathname: "/student/NoticeBoard",
+                        params: currentStudentId ? { student_id: String(currentStudentId) } : {},
+                      } as any);
+                    }}
+                    style={{
+                      padding: 12,
+                      borderRadius: 14,
+                      borderWidth: 1,
+                      borderColor: colors.border,
+                      backgroundColor: colors.surfaceSubtle,
+                    }}
+                  >
+                    <View
+                      style={{
+                        flexDirection: "row",
+                        justifyContent: "space-between",
+                        alignItems: "flex-start",
+                        gap: 8,
+                        marginBottom: 4,
+                      }}
+                    >
+                      <Text
+                        style={{
+                          flex: 1,
+                          fontSize: 13.5,
+                          fontWeight: "800",
+                          color: colors.text,
+                        }}
+                        numberOfLines={1}
+                      >
+                        {notice.title || "School Notice"}
+                      </Text>
+                      {!!dateLabel && (
+                        <Text
+                          style={{
+                            fontSize: 11,
+                            fontWeight: "600",
+                            color: colors.textMuted,
+                          }}
+                        >
+                          {dateLabel}
+                        </Text>
+                      )}
+                    </View>
+                    <Text
+                      style={{
+                        fontSize: 12.5,
+                        lineHeight: 18,
+                        color: colors.textSecondary,
+                      }}
+                      numberOfLines={2}
+                    >
+                      {stripHtmlPreview(notice.message || notice.description || "")}
+                    </Text>
+                  </TouchableOpacity>
+                );
+              })
+            ) : (
+              <Text
+                style={{
+                  fontSize: 13,
+                  color: colors.textMuted,
+                  textAlign: "center",
+                  paddingVertical: 12,
+                }}
+              >
+                No recent notices published.
+              </Text>
+            )}
+          </View>
+        </View>
 
         <ExamResult
           data={examResultsSummary}

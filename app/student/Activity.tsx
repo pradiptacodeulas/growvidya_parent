@@ -1,6 +1,6 @@
 import ActivityItem from "@/components/dashboard/ActivityItem";
 import SubHeader from "@/components/dashboard/SubHeader";
-import React, { useEffect, useState, useCallback } from "react";
+import React, { useEffect, useState, useCallback, useMemo } from "react";
 import {
   ScrollView,
   StyleSheet,
@@ -9,6 +9,8 @@ import {
   ActivityIndicator,
   RefreshControl,
   TouchableOpacity,
+  TextInput,
+  Modal,
 } from "react-native";
 import { useDispatch, useSelector } from "react-redux";
 import { AppDispatch, RootState } from "@/redux/store";
@@ -16,27 +18,33 @@ import { useAppTheme } from "@/theme";
 import { apiFetch, resolveStudentId } from "@/services/apiClient";
 import { fetchDashboardData } from "@/redux/home/homeThunk";
 import { useLocalSearchParams } from "expo-router";
-import { Bell, Sparkles } from "lucide-react-native";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
+import { Bell, ChevronRight, Megaphone, Search, Sparkles, X } from "lucide-react-native";
+import { formatHtmlToReadableText, stripHtmlPreview } from "@/utils/html";
 
 const Activity = () => {
   const { colors } = useAppTheme();
+  const insets = useSafeAreaInsets();
   const params = useLocalSearchParams<{ student_id?: string; tab?: string }>();
   const dispatch = useDispatch<AppDispatch>();
   const { user } = useSelector((state: RootState) => state.auth);
   const { dashboardData, selectedStudentId } = useSelector((state: RootState) => state.home);
 
   const [activeTab, setActiveTab] = useState<"ACTIVITIES" | "NOTICES">(
-    params.tab === "NOTICES" ? "NOTICES" : "ACTIVITIES"
+    String(params.tab || "").toUpperCase() === "NOTICES" ? "NOTICES" : "ACTIVITIES"
   );
   const [activities, setActivities] = useState<any[]>([]);
   const [notices, setNotices] = useState<any[]>([]);
+  const [noticeSearch, setNoticeSearch] = useState("");
+  const [selectedNotice, setSelectedNotice] = useState<any | null>(null);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
 
   useEffect(() => {
-    if (params.tab === "NOTICES") {
+    const t = String(params.tab || "").toUpperCase();
+    if (t === "NOTICES") {
       setActiveTab("NOTICES");
-    } else if (params.tab === "ACTIVITIES") {
+    } else if (t === "ACTIVITIES") {
       setActiveTab("ACTIVITIES");
     }
   }, [params.tab]);
@@ -72,7 +80,12 @@ const Activity = () => {
         }
 
         if (noticeResponse.success && noticeResponse.data) {
-          setNotices(Array.isArray(noticeResponse.data) ? noticeResponse.data : [noticeResponse.data]);
+          const list = Array.isArray(noticeResponse.data)
+            ? noticeResponse.data
+            : Array.isArray(noticeResponse.data?.notices)
+            ? noticeResponse.data.notices
+            : [noticeResponse.data];
+          setNotices(list);
         } else {
           setNotices([]);
         }
@@ -100,6 +113,20 @@ const Activity = () => {
     ]);
     setRefreshing(false);
   }, [loadData, dispatch, targetStudentId]);
+
+  const filteredNotices = useMemo(() => {
+    if (!noticeSearch.trim()) return notices;
+    const term = noticeSearch.toLowerCase().trim();
+    return notices.filter((n) => {
+      const titleMatch = String(n.title || "").toLowerCase().includes(term);
+      const msgMatch = stripHtmlPreview(
+        n.message || n.description || n.details || ""
+      )
+        .toLowerCase()
+        .includes(term);
+      return titleMatch || msgMatch;
+    });
+  }, [notices, noticeSearch]);
 
   return (
     <View style={{ flex: 1, backgroundColor: colors.background }}>
@@ -155,6 +182,32 @@ const Activity = () => {
         </TouchableOpacity>
       </View>
 
+      {/* Search Bar for Notices */}
+      {activeTab === "NOTICES" && (
+        <View style={styles.searchRow}>
+          <View
+            style={[
+              styles.searchBox,
+              { backgroundColor: colors.cardBg, borderColor: colors.border },
+            ]}
+          >
+            <Search size={17} color={colors.textMuted} />
+            <TextInput
+              value={noticeSearch}
+              onChangeText={setNoticeSearch}
+              placeholder="Search notices..."
+              placeholderTextColor={colors.textMuted}
+              style={[styles.searchInput, { color: colors.text }]}
+            />
+            {noticeSearch.length > 0 && (
+              <TouchableOpacity onPress={() => setNoticeSearch("")} hitSlop={8}>
+                <X size={16} color={colors.textMuted} />
+              </TouchableOpacity>
+            )}
+          </View>
+        </View>
+      )}
+
       <ScrollView
         style={[styles.scrollContent, { backgroundColor: colors.background }]}
         contentContainerStyle={{ paddingBottom: 40 }}
@@ -191,7 +244,9 @@ const Activity = () => {
                 return (
                   <ActivityItem
                     key={item.id || index}
-                    description={item.activity_description || item.description || item.title || ""}
+                    description={stripHtmlPreview(
+                      item.activity_description || item.description || item.title || ""
+                    )}
                     date={formattedDate}
                     isLast={index === activities.length - 1}
                   />
@@ -215,17 +270,21 @@ const Activity = () => {
               </Text>
             </View>
           )
-        ) : notices.length > 0 ? (
+        ) : filteredNotices.length > 0 ? (
           <View style={styles.noticesList}>
-            {notices.map((item: any, idx: number) => {
-              const rawDate = item.notice_date || item.date || item.created_at || "";
+            {filteredNotices.map((item: any, idx: number) => {
+              const rawDate = item.publish_on || item.notice_date || item.date || item.created_at || "";
               const formattedDate = rawDate
                 ? String(rawDate).split("T")[0].split(" ")[0]
                 : "";
-              const bodyText = item.message || item.description || item.details || "";
+              const bodyText = stripHtmlPreview(
+                item.message || item.description || item.details || ""
+              );
               return (
-                <View
+                <TouchableOpacity
                   key={item.id ? `${item.id}-${idx}` : idx}
+                  activeOpacity={0.85}
+                  onPress={() => setSelectedNotice(item)}
                   style={[
                     styles.noticeCard,
                     { backgroundColor: colors.cardBg, borderColor: colors.border },
@@ -245,11 +304,22 @@ const Activity = () => {
                     <Text style={[styles.noticeTitle, { color: colors.text }]}>{item.title}</Text>
                   ) : null}
                   {bodyText ? (
-                    <Text style={[styles.noticeMessage, { color: colors.textSecondary }]}>
+                    <Text
+                      style={[styles.noticeMessage, { color: colors.textSecondary }]}
+                      numberOfLines={3}
+                    >
                       {bodyText}
                     </Text>
                   ) : null}
-                </View>
+                  <View style={[styles.readNoticeRow, { borderTopColor: colors.border }]}>
+                    <View style={[styles.readPill, { backgroundColor: colors.primaryLight }]}>
+                      <Text style={[styles.readPillText, { color: colors.primary }]}>
+                        Read Notice
+                      </Text>
+                      <ChevronRight size={13} color={colors.primary} />
+                    </View>
+                  </View>
+                </TouchableOpacity>
               );
             })}
           </View>
@@ -263,11 +333,79 @@ const Activity = () => {
             <Bell size={36} color={colors.textMuted} />
             <Text style={[styles.emptyTitle, { color: colors.text }]}>No Active Circulars</Text>
             <Text style={[styles.emptySub, { color: colors.textSecondary }]}>
-              School notices and announcements will be shown here.
+              {noticeSearch.trim()
+                ? "No notices match your search criteria."
+                : "School notices and announcements will be shown here."}
             </Text>
           </View>
         )}
       </ScrollView>
+
+      {/* Notice Detail Modal */}
+      <Modal
+        visible={!!selectedNotice}
+        transparent
+        animationType="slide"
+        onRequestClose={() => setSelectedNotice(null)}
+      >
+        <View style={styles.modalBackdrop}>
+          <View
+            style={[
+              styles.modalCard,
+              {
+                backgroundColor: colors.cardBg,
+                paddingBottom: Math.max(insets.bottom, 16),
+              },
+            ]}
+          >
+            <View style={[styles.modalHeader, { borderBottomColor: colors.border }]}>
+              <View style={styles.modalHeaderLeft}>
+                <View style={[styles.modalIconBox, { backgroundColor: colors.primaryLight }]}>
+                  <Megaphone size={18} color={colors.primary} />
+                </View>
+                <View style={{ flex: 1 }}>
+                  <Text style={[styles.modalTitle, { color: colors.text }]} numberOfLines={2}>
+                    {selectedNotice?.title || "School Notice"}
+                  </Text>
+                  <Text style={[styles.modalDate, { color: colors.textMuted }]}>
+                    {String(
+                      selectedNotice?.publish_on ||
+                        selectedNotice?.notice_date ||
+                        selectedNotice?.created_at ||
+                        ""
+                    )
+                      .split("T")[0]
+                      .split(" ")[0]}
+                  </Text>
+                </View>
+              </View>
+              <TouchableOpacity
+                onPress={() => setSelectedNotice(null)}
+                style={[styles.modalCloseBtn, { backgroundColor: colors.surfaceSubtle }]}
+              >
+                <X size={18} color={colors.textSecondary} />
+              </TouchableOpacity>
+            </View>
+
+            <ScrollView style={styles.modalBody} contentContainerStyle={{ paddingVertical: 16 }}>
+              <View
+                style={[
+                  styles.modalContentBox,
+                  { backgroundColor: colors.surfaceSubtle, borderColor: colors.border },
+                ]}
+              >
+                <Text style={[styles.modalContentText, { color: colors.text }]}>
+                  {formatHtmlToReadableText(
+                    selectedNotice?.message ||
+                      selectedNotice?.description ||
+                      selectedNotice?.details
+                  ) || "No details provided."}
+                </Text>
+              </View>
+            </ScrollView>
+          </View>
+        </View>
+      </Modal>
     </View>
   );
 };
@@ -301,6 +439,24 @@ const styles = StyleSheet.create({
   tabBtnText: {
     fontSize: 13,
     fontWeight: "700",
+  },
+  searchRow: {
+    paddingHorizontal: 16,
+    paddingBottom: 6,
+  },
+  searchBox: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 10,
+    paddingHorizontal: 14,
+    height: 44,
+    borderRadius: 12,
+    borderWidth: 1,
+  },
+  searchInput: {
+    flex: 1,
+    fontSize: 13.5,
+    paddingVertical: 0,
   },
   centerContainer: {
     padding: 40,
@@ -367,5 +523,84 @@ const styles = StyleSheet.create({
   noticeMessage: {
     fontSize: 13,
     lineHeight: 18,
+  },
+  readNoticeRow: {
+    borderTopWidth: 1,
+    marginTop: 10,
+    paddingTop: 10,
+    flexDirection: "row",
+    justifyContent: "flex-end",
+  },
+  readPill: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 4,
+    paddingHorizontal: 11,
+    paddingVertical: 5,
+    borderRadius: 999,
+  },
+  readPillText: {
+    fontSize: 11.5,
+    fontWeight: "700",
+  },
+  modalBackdrop: {
+    flex: 1,
+    backgroundColor: "rgba(15, 23, 42, 0.55)",
+    justifyContent: "flex-end",
+  },
+  modalCard: {
+    borderTopLeftRadius: 24,
+    borderTopRightRadius: 24,
+    maxHeight: "82%",
+  },
+  modalHeader: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    paddingHorizontal: 18,
+    paddingVertical: 16,
+    borderBottomWidth: 1,
+    gap: 12,
+  },
+  modalHeaderLeft: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 12,
+    flex: 1,
+  },
+  modalIconBox: {
+    width: 36,
+    height: 36,
+    borderRadius: 11,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  modalTitle: {
+    fontSize: 15.5,
+    fontWeight: "800",
+  },
+  modalDate: {
+    fontSize: 11.5,
+    marginTop: 2,
+    fontWeight: "600",
+  },
+  modalCloseBtn: {
+    width: 34,
+    height: 34,
+    borderRadius: 17,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  modalBody: {
+    paddingHorizontal: 18,
+  },
+  modalContentBox: {
+    padding: 16,
+    borderRadius: 16,
+    borderWidth: 1,
+  },
+  modalContentText: {
+    fontSize: 14,
+    lineHeight: 22,
   },
 });

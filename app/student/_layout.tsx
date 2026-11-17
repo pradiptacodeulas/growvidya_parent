@@ -14,6 +14,7 @@ export default function StudentLayout() {
       <Stack.Screen name="Holidays" />
       <Stack.Screen name="Hostel" />
       <Stack.Screen name="Medical" />
+      <Stack.Screen name="NoticeBoard" />
       <Stack.Screen name="Profile" />
       <Stack.Screen name="StudyMaterial" />
       <Stack.Screen name="Syllabus" />

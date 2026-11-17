@@ -6,6 +6,7 @@ import {
   fetchMaterialTypes,
   fetchChildSyllabus,
   fetchChildHolidays,
+  fetchAcademicYears,
   HolidayItem,
 } from "./homeThunk";
 
@@ -22,6 +23,8 @@ interface HomeState {
   holidays: HolidayItem[];
   holidaysLoading: boolean;
   holidaysError: string | null;
+  academicYears: any[];
+  activeAcademicYear: string;
   loading: boolean;
   termLoading: Record<string, boolean>;
   error: string | null;
@@ -41,6 +44,8 @@ const initialState: HomeState = {
   holidays: [],
   holidaysLoading: false,
   holidaysError: null,
+  academicYears: [],
+  activeAcademicYear: "",
   loading: false,
   termLoading: {},
   error: null,
@@ -77,6 +82,8 @@ export const homeSlice = createSlice({
       state.holidays = [];
       state.holidaysLoading = false;
       state.holidaysError = null;
+      state.academicYears = [];
+      state.activeAcademicYear = "";
       state.loading = false;
       state.termLoading = {};
       state.error = null;
@@ -155,6 +162,10 @@ export const homeSlice = createSlice({
         state.holidaysLoading = false;
         state.holidays = [];
         state.holidaysError = action.payload as string;
+      })
+      .addCase(fetchAcademicYears.fulfilled, (state, action) => {
+        state.academicYears = action.payload.list || [];
+        state.activeAcademicYear = action.payload.activeLabel || "";
       });
   },
 });

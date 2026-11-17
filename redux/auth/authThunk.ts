@@ -1,18 +1,23 @@
 import { createAsyncThunk } from "@reduxjs/toolkit";
-import { storeData } from "../../utils/asyncStorage";
+import { storeData, removeData } from "../../utils/asyncStorage";
 import { apiFetch, setAuthToken } from "@/services/apiClient";
 import { RootState } from "../store";
 
 const login = createAsyncThunk(
   "auth/login",
   async (
-    { email, password }: { email: string; password: string },
+    {
+      identifier,
+      email,
+      password,
+    }: { identifier?: string; email?: string; password: string },
     { rejectWithValue }
   ) => {
     try {
+      const cleanId = (identifier || email || "").trim();
       const response = await apiFetch("/parent/auth/login", {
         method: "POST",
-        body: JSON.stringify({ email: email.trim(), password }),
+        body: JSON.stringify({ identifier: cleanId, email: cleanId, password }),
       });
 
       if (!response.success || !response.data) {
@@ -41,6 +46,111 @@ const login = createAsyncThunk(
       return userData;
     } catch (error: any) {
       return rejectWithValue(error.message || "An unexpected error occurred during login");
+    }
+  }
+);
+
+export const checkParentAuth = createAsyncThunk(
+  "auth/checkParentAuth",
+  async (cachedUser: any | undefined, { getState, rejectWithValue }) => {
+    const state = getState() as RootState;
+    const baseUser = cachedUser || state.auth.user;
+    const activeToken =
+      baseUser?.token ||
+      baseUser?.access_token ||
+      baseUser?.data?.token ||
+      state.auth.token;
+
+    if (!activeToken) {
+      setAuthToken(null);
+      await removeData("userData");
+      await removeData("parent_profile");
+      return rejectWithValue({
+        message: "No active parent session",
+        forceLogout: true,
+      });
+    }
+
+    setAuthToken(activeToken);
+
+    const activeChildId =
+      state.home?.selectedStudentId ||
+      baseUser?.activeChild?.id ||
+      baseUser?.children?.[0]?.id;
+    const endpoint = activeChildId
+      ? `/parent/auth/profile?student_id=${activeChildId}`
+      : "/parent/auth/profile";
+
+    const response = await apiFetch(endpoint, { method: "GET" }, 8000);
+
+    if (response.success && response.data) {
+      const freshParent = response.data?.parent || response.data;
+      const mergedUser = {
+        ...baseUser,
+        ...freshParent,
+        token: activeToken,
+      };
+      await storeData("userData", mergedUser);
+      return mergedUser;
+    }
+
+    // Explicit invalid/expired token or deactivated parent/school account
+    if (response.status === 401 || response.status === 403) {
+      setAuthToken(null);
+      await removeData("userData");
+      await removeData("parent_profile");
+      return rejectWithValue({
+        message: response.message || "Parent session invalid or expired",
+        forceLogout: true,
+      });
+    }
+
+    // Transient network / offline failure: preserve cached session
+    return rejectWithValue({
+      message: response.message || "Unable to verify session while offline",
+      forceLogout: false,
+      cachedUser: baseUser,
+    });
+  }
+);
+
+export const switchStudent = createAsyncThunk(
+  "auth/switchStudent",
+  async (studentId: string | number, { getState, rejectWithValue }) => {
+    try {
+      const response = await apiFetch("/parent/auth/switch-student", {
+        method: "POST",
+        body: JSON.stringify({ student_id: Number(studentId) }),
+      });
+
+      if (!response.success || !response.data) {
+        throw new Error(response.message || "Failed to switch child profile");
+      }
+
+      const resData = response.data;
+      const state = getState() as RootState;
+      const nextToken = resData.token || state.auth.token;
+      const nextActiveChild = resData.activeChild || state.auth.user?.activeChild || null;
+
+      if (nextToken) {
+        setAuthToken(nextToken);
+      }
+
+      const updatedUser = {
+        ...state.auth.user,
+        activeChild: nextActiveChild,
+        token: nextToken,
+      };
+
+      await storeData("userData", updatedUser);
+
+      return {
+        token: nextToken,
+        activeChild: nextActiveChild,
+        user: updatedUser,
+      };
+    } catch (error: any) {
+      return rejectWithValue(error.message || "Failed to switch child profile");
     }
   }
 );
@@ -142,7 +252,9 @@ export const loginWithPasscode = createAsyncThunk(
         method: "POST",
         body: JSON.stringify({
           identifier: identifier.trim(),
+          email: identifier.trim(),
           passcode: passcode.trim(),
+          otp: passcode.trim(),
         }),
       });
 
